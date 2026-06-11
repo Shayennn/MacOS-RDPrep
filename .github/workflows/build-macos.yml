@@ -135,6 +135,11 @@ jobs:
             "artifactName": "RDPrep_${version}_${os}_${arch}.${ext}",
             "asar": false,
             "directories": { "output": "release/" },
+            "publish": {
+              "provider": "github",
+              "owner": "Shayennn",
+              "repo": "MacOS-RDPrep"
+            },
             "files": [
               "**/*",
               "build/icon.*",

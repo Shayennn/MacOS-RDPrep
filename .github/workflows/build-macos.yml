@@ -112,7 +112,7 @@ jobs:
             echo "WARNING: main.min.js not found"
           fi
 
-      - name: Patch Electron 22 renderer compatibility
+      - name: Patch main.js (Electron 22 compat + enable devtools)
         run: |
           PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
           node -e '
@@ -120,11 +120,21 @@ jobs:
             const path = `${process.argv[1]}/main.js`;
             let source = fs.readFileSync(path, "utf8");
 
+            // Electron 22 renderer compatibility
             source = source.replace(/nodeIntegration:\s*!0,(?!\s*\n\s*contextIsolation:)/g,
               "nodeIntegration: !0,\n\t\t\tcontextIsolation: !1,\n\t\t\tsandbox: !1,");
 
+            // Enable devtools in production
+            source = source.replace("devTools: !!serve", "devTools: true");
+
+            // Auto-open devtools on launch
+            source = source.replace(
+              "serve && win.webContents.openDevTools()",
+              "win.webContents.openDevTools()"
+            );
+
             fs.writeFileSync(path, source);
-            console.log(`Patched ${path} for legacy renderer Node integration`);
+            console.log("Patched: renderer compat + devtools enabled");
           ' "$PROJECT_DIR"
 
       - name: Patch package.json for macOS

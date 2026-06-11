@@ -197,14 +197,35 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Patch SSL verification (insecured variant)
+      - name: Patch insecured variant (SSL bypass + direct downloads)
         if: matrix.variant == 'insecured'
         run: |
           PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
-          echo "Patching main.js to disable SSL verification globally..."
+
+          echo "=== Patch 1: Disable SSL verification globally ==="
           sed -i '' '1s/^/process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";\n/' "$PROJECT_DIR/main.js"
           head -3 "$PROJECT_DIR/main.js"
-          echo "Patched: NODE_TLS_REJECT_UNAUTHORIZED=0 prepended to main.js"
+
+          echo "=== Patch 2: Switch to dev mode for direct HTTP downloads ==="
+          DIST_JS=$(ls "$PROJECT_DIR"/dist/main.*.js 2>/dev/null | head -1)
+          if [[ -n "$DIST_JS" ]]; then
+            sed -i '' 's/softwareMode:"prod"/softwareMode:"dev"/g' "$DIST_JS"
+            echo "Patched $(basename "$DIST_JS"): softwareMode prod → dev"
+            grep -o 'softwareMode:"[^"]*"' "$DIST_JS" || true
+          fi
+
+          echo "=== Patch 3: Bypass check-update POST failure → proceed to direct download ==="
+          SVC_JS="$PROJECT_DIR/common/services/add-tax-service.js"
+          CATCH_OLD='.catch(function(e){w.sender.send("common-download-reply",{action:"on_error",error:e,url:r,data:t,dataPlugin:a})})'
+          CATCH_NEW='.catch(function(e){console.log("check-update failed, proceeding with direct download:",e);c()})'
+          if grep -qF "$CATCH_OLD" "$SVC_JS"; then
+            sed -i '' "s|${CATCH_OLD}|${CATCH_NEW}|g" "$SVC_JS"
+            echo "Patched add-tax-service.js: check-update catch → fallback to c()"
+          else
+            echo "WARNING: catch string not found in add-tax-service.js"
+          fi
+
+          echo "=== All insecured patches applied ==="
 
       - name: Write electron-builder config
         run: |
@@ -439,12 +460,12 @@ jobs:
 
             **4 variants available:**
 
-            | File | Arch | SSL | Notes |
-            |------|------|-----|-------|
-            | `RDPrep_*_arm64.dmg` | Apple Silicon | Normal | Standard build |
-            | `RDPrep_*_arm64-insecured.dmg` | Apple Silicon | **Disabled** | For corp SSL intercept |
-            | `RDPrep_*_x64.dmg` | Intel | Normal | Standard build |
-            | `RDPrep_*_x64-insecured.dmg` | Intel | **Disabled** | For corp SSL intercept |
+            | File | Arch | Notes |
+            |------|------|-------|
+            | `RDPrep_*_arm64.dmg` | Apple Silicon | Standard build |
+            | `RDPrep_*_arm64-insecured.dmg` | Apple Silicon | Direct downloads, SSL bypass |
+            | `RDPrep_*_x64.dmg` | Intel | Standard build |
+            | `RDPrep_*_x64-insecured.dmg` | Intel | Direct downloads, SSL bypass |
 
             ### Installation
             1. Download the DMG for your architecture
@@ -453,15 +474,13 @@ jobs:
             4. If macOS says the app is damaged:
                `sudo xattr -dr com.apple.quarantine /Applications/RDPrep.app`
 
-            **Insecured builds** disable HTTPS certificate verification (`NODE_TLS_REJECT_UNAUTHORIZED=0`).
-            Use them if your corporate network does SSL inspection/interception that causes certificate errors.
+            **Insecured builds** have two patches:
+            1. **SSL bypass** — disables HTTPS certificate verification (`NODE_TLS_REJECT_UNAUTHORIZED=0`)
+            2. **Direct downloads** — redirects form downloads from Dropbox to the RD server directly (`efilingdownload2.rd.go.th`)
+
+            Use them if your network blocks Dropbox or does SSL inspection/interception.
 
             Ad-hoc signed, not Apple-notarized.
-
-            ### Source
-            - Original: `${{ needs.unpack.outputs.url }}`
-            - Built on: `macos-latest` via GitHub Actions
-            - Electron: 22.3.27
           files: |
             release-artifacts/**/*.dmg
             screenshots/**/*.png

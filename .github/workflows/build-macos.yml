@@ -134,7 +134,7 @@ jobs:
 
   build-arm64:
     needs: unpack
-    runs-on: macos-14-arm64
+    runs-on: macos-latest
     steps:
       - name: Download unpacked project
         uses: actions/download-artifact@v4
@@ -287,7 +287,7 @@ jobs:
 
             ### Source
             - Original: `${{ needs.unpack.outputs.url }}`
-            - Built on: `macos-latest` (arm64) via GitHub Actions
+            - Built on: `macos-latest` targeting arm64 via GitHub Actions
             - Electron: 22.3.27
           files: |
             rdprep-mac/release/*.dmg

@@ -123,6 +123,9 @@ jobs:
             pkg.scripts = pkg.scripts || {};
             pkg.scripts.start = "electron .";
             pkg.scripts["build:mac"] = "electron-builder --mac --config electron-builder-mac.json";
+            pkg.dependencies = pkg.dependencies || {};
+            pkg.dependencies.sqlite3 = "5.1.7";
+            pkg.dependencies.bcrypt = "5.1.1";
             pkg.devDependencies = pkg.devDependencies || {};
             pkg.devDependencies.electron = "^22.3.27";
             pkg.devDependencies["electron-builder"] = "^24.13.3";
@@ -197,15 +200,21 @@ jobs:
           npm_config_target_arch: arm64
         run: |
           rm -rf node_modules
+          rm -f package-lock.json
           npm install
 
-          SQLITE_BINDING="node_modules/sqlite3/lib/binding/napi-v3-darwin-arm64/node_sqlite3.node"
-          if [[ ! -f "$SQLITE_BINDING" ]]; then
-            echo "Missing sqlite3 arm64 binding: $SQLITE_BINDING"
-            find node_modules/sqlite3/lib/binding -name node_sqlite3.node -print 2>/dev/null || true
+          SQLITE_BINDING=$(find node_modules/sqlite3 -name node_sqlite3.node -print -quit 2>/dev/null || true)
+          if [[ -z "$SQLITE_BINDING" ]]; then
+            echo "Missing sqlite3 native binding"
+            find node_modules/sqlite3 -name "*.node" -print 2>/dev/null || true
             exit 1
           fi
-          find node_modules/sqlite3/lib/binding -name node_sqlite3.node -print
+          SQLITE_ARCHS=$(lipo -archs "$SQLITE_BINDING" 2>/dev/null || true)
+          echo "sqlite3 binding: $SQLITE_BINDING ($SQLITE_ARCHS)"
+          if [[ "$SQLITE_ARCHS" != *"arm64"* ]]; then
+            echo "sqlite3 binding is not arm64"
+            exit 1
+          fi
 
           BCRYPT_BINDING=$(find node_modules/bcrypt/lib/binding -name bcrypt_lib.node -print -quit 2>/dev/null || true)
           if [[ -z "$BCRYPT_BINDING" ]]; then
@@ -213,7 +222,12 @@ jobs:
             find node_modules/bcrypt/lib/binding -name "*.node" -print 2>/dev/null || true
             exit 1
           fi
-          echo "bcrypt binding: $BCRYPT_BINDING"
+          BCRYPT_ARCHS=$(lipo -archs "$BCRYPT_BINDING" 2>/dev/null || true)
+          echo "bcrypt binding: $BCRYPT_BINDING ($BCRYPT_ARCHS)"
+          if [[ "$BCRYPT_ARCHS" != *"arm64"* ]]; then
+            echo "bcrypt binding is not arm64"
+            exit 1
+          fi
 
       - name: Build macOS DMG (arm64)
         working-directory: rdprep-mac
@@ -235,10 +249,16 @@ jobs:
             exit 1
           fi
 
-          SQLITE_BINDING="$APP_PATH/Contents/Resources/app/node_modules/sqlite3/lib/binding/napi-v3-darwin-arm64/node_sqlite3.node"
-          if [[ ! -f "$SQLITE_BINDING" ]]; then
-            echo "Missing packaged sqlite3 arm64 binding: $SQLITE_BINDING"
-            find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3/lib/binding" -name node_sqlite3.node -print 2>/dev/null || true
+          SQLITE_BINDING=$(find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3" -name node_sqlite3.node -print -quit 2>/dev/null || true)
+          if [[ -z "$SQLITE_BINDING" ]]; then
+            echo "Missing packaged sqlite3 native binding"
+            find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3" -name "*.node" -print 2>/dev/null || true
+            exit 1
+          fi
+          SQLITE_ARCHS=$(lipo -archs "$SQLITE_BINDING" 2>/dev/null || true)
+          echo "packaged sqlite3 binding: $SQLITE_BINDING ($SQLITE_ARCHS)"
+          if [[ "$SQLITE_ARCHS" != *"arm64"* ]]; then
+            echo "packaged sqlite3 binding is not arm64"
             exit 1
           fi
 
@@ -246,6 +266,12 @@ jobs:
           if [[ -z "$BCRYPT_BINDING" ]]; then
             echo "Missing packaged bcrypt native binding"
             find "$APP_PATH/Contents/Resources/app/node_modules/bcrypt/lib/binding" -name "*.node" -print 2>/dev/null || true
+            exit 1
+          fi
+          BCRYPT_ARCHS=$(lipo -archs "$BCRYPT_BINDING" 2>/dev/null || true)
+          echo "packaged bcrypt binding: $BCRYPT_BINDING ($BCRYPT_ARCHS)"
+          if [[ "$BCRYPT_ARCHS" != *"arm64"* ]]; then
+            echo "packaged bcrypt binding is not arm64"
             exit 1
           fi
 
@@ -375,15 +401,21 @@ jobs:
           npm_config_target_arch: x64
         run: |
           rm -rf node_modules
+          rm -f package-lock.json
           npm install
 
-          SQLITE_BINDING="node_modules/sqlite3/lib/binding/napi-v3-darwin-x64/node_sqlite3.node"
-          if [[ ! -f "$SQLITE_BINDING" ]]; then
-            echo "Missing sqlite3 x64 binding: $SQLITE_BINDING"
-            find node_modules/sqlite3/lib/binding -name node_sqlite3.node -print 2>/dev/null || true
+          SQLITE_BINDING=$(find node_modules/sqlite3 -name node_sqlite3.node -print -quit 2>/dev/null || true)
+          if [[ -z "$SQLITE_BINDING" ]]; then
+            echo "Missing sqlite3 native binding"
+            find node_modules/sqlite3 -name "*.node" -print 2>/dev/null || true
             exit 1
           fi
-          find node_modules/sqlite3/lib/binding -name node_sqlite3.node -print
+          SQLITE_ARCHS=$(lipo -archs "$SQLITE_BINDING" 2>/dev/null || true)
+          echo "sqlite3 binding: $SQLITE_BINDING ($SQLITE_ARCHS)"
+          if [[ "$SQLITE_ARCHS" != *"x86_64"* ]]; then
+            echo "sqlite3 binding is not x64"
+            exit 1
+          fi
 
           BCRYPT_BINDING=$(find node_modules/bcrypt/lib/binding -name bcrypt_lib.node -print -quit 2>/dev/null || true)
           if [[ -z "$BCRYPT_BINDING" ]]; then
@@ -391,7 +423,12 @@ jobs:
             find node_modules/bcrypt/lib/binding -name "*.node" -print 2>/dev/null || true
             exit 1
           fi
-          echo "bcrypt binding: $BCRYPT_BINDING"
+          BCRYPT_ARCHS=$(lipo -archs "$BCRYPT_BINDING" 2>/dev/null || true)
+          echo "bcrypt binding: $BCRYPT_BINDING ($BCRYPT_ARCHS)"
+          if [[ "$BCRYPT_ARCHS" != *"x86_64"* ]]; then
+            echo "bcrypt binding is not x64"
+            exit 1
+          fi
 
       - name: Build macOS DMG (x64)
         working-directory: rdprep-mac
@@ -413,10 +450,16 @@ jobs:
             exit 1
           fi
 
-          SQLITE_BINDING="$APP_PATH/Contents/Resources/app/node_modules/sqlite3/lib/binding/napi-v3-darwin-x64/node_sqlite3.node"
-          if [[ ! -f "$SQLITE_BINDING" ]]; then
-            echo "Missing packaged sqlite3 x64 binding: $SQLITE_BINDING"
-            find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3/lib/binding" -name node_sqlite3.node -print 2>/dev/null || true
+          SQLITE_BINDING=$(find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3" -name node_sqlite3.node -print -quit 2>/dev/null || true)
+          if [[ -z "$SQLITE_BINDING" ]]; then
+            echo "Missing packaged sqlite3 native binding"
+            find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3" -name "*.node" -print 2>/dev/null || true
+            exit 1
+          fi
+          SQLITE_ARCHS=$(lipo -archs "$SQLITE_BINDING" 2>/dev/null || true)
+          echo "packaged sqlite3 binding: $SQLITE_BINDING ($SQLITE_ARCHS)"
+          if [[ "$SQLITE_ARCHS" != *"x86_64"* ]]; then
+            echo "packaged sqlite3 binding is not x64"
             exit 1
           fi
 
@@ -424,6 +467,12 @@ jobs:
           if [[ -z "$BCRYPT_BINDING" ]]; then
             echo "Missing packaged bcrypt native binding"
             find "$APP_PATH/Contents/Resources/app/node_modules/bcrypt/lib/binding" -name "*.node" -print 2>/dev/null || true
+            exit 1
+          fi
+          BCRYPT_ARCHS=$(lipo -archs "$BCRYPT_BINDING" 2>/dev/null || true)
+          echo "packaged bcrypt binding: $BCRYPT_BINDING ($BCRYPT_ARCHS)"
+          if [[ "$BCRYPT_ARCHS" != *"x86_64"* ]]; then
+            echo "packaged bcrypt binding is not x64"
             exit 1
           fi
 

@@ -190,7 +190,7 @@ jobs:
         working-directory: rdprep-mac
         run: |
           npm install --ignore-scripts
-          npm rebuild sqlite3 bcrypt
+          npx electron-rebuild -f -w sqlite3 bcrypt
 
       - name: Build macOS DMG
         working-directory: rdprep-mac

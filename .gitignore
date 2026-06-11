@@ -1,0 +1,10 @@
+*.exe
+*.dmg
+*.zip
+*.7z
+*.node
+rdprep-electron/
+rdprep-unpacked/
+release/
+tmp/
+.DS_Store

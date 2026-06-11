@@ -346,23 +346,6 @@ console.log("  Updated files array and extraResources");
     info "Electron-builder config updated"
 }
 
-patch_api_urls() {
-    local output_dir="$1"
-
-    step "Patching API base URL and checkUpdateUrl..."
-
-    local main_bundle
-    main_bundle=$(find "$output_dir/dist" -name 'main.*.js' -type f 2>/dev/null | head -n 1)
-
-    if [[ -z "$main_bundle" ]]; then
-        warn "dist/main.*.js not found, skipping checkUpdateUrl patch"
-        return 0
-    fi
-
-    sed -i 's|http://localhost:8774|https://efilingdownload2.rd.go.th|g' "$main_bundle"
-    info "Patched base URL: localhost:8774 -> efilingdownload2.rd.go.th"
-}
-
 print_summary() {
     local output_dir="$1"
     local start_time="$2"
@@ -398,10 +381,6 @@ print_summary() {
     [[ -d "$output_dir/plugins" ]]            && printf "  ${GREEN}✓${NC} plugins/ (backend modules)\n"
     [[ -d "$output_dir/node_modules" ]]       && printf "  ${GREEN}✓${NC} node_modules/\n"
     [[ -f "$output_dir/data/offline.db" ]]    && printf "  ${GREEN}✓${NC} data/offline.db (SQLite)\n"
-
-    echo ""
-    step "Applied patches:"
-    printf "  ${GREEN}✓${NC} API base URL: localhost:8774 -> efilingdownload2.rd.go.th\n"
 
     echo ""
     step "Next steps:"
@@ -458,7 +437,6 @@ main() {
     beautify_main_js "$output_dir"
     update_package_json "$output_dir"
     update_electron_builder_config "$output_dir"
-    patch_api_urls "$output_dir"
 
     info "Removing temp directory: $TMPDIR"
     rm -rf "$TMPDIR"

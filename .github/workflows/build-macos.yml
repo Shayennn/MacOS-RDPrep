@@ -17,6 +17,10 @@ on:
 env:
   DEFAULT_DOWNLOAD_URL: 'https://rdserverdoc.rd.go.th/prog_download/RDPrep_1.3.2_win_x64.exe'
 
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unpack:
     runs-on: ubuntu-latest
@@ -298,7 +302,7 @@ jobs:
 
   build-x64:
     needs: unpack
-    runs-on: macos-13
+    runs-on: macos-latest
     steps:
       - name: Download unpacked project
         uses: actions/download-artifact@v4
@@ -451,7 +455,7 @@ jobs:
 
             ### Source
             - Original: `${{ needs.unpack.outputs.url }}`
-            - Built on: `macos-13` (x64) via GitHub Actions
+            - Built on: `macos-latest` targeting x64 via GitHub Actions
             - Electron: 22.3.27
           files: |
             rdprep-mac/release/*.dmg

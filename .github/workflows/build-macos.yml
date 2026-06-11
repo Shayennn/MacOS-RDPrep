@@ -216,8 +216,8 @@ jobs:
           echo "Launching RDPrep.app..."
           open "$APP_PATH"
 
-          echo "Waiting for app to render (10s)..."
-          sleep 10
+          echo "Waiting for app to render (30s)..."
+          sleep 30
 
           echo "Capturing screenshot..."
           screencapture -x rdprep-screenshot.png

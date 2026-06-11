@@ -284,15 +284,15 @@ jobs:
           echo "Launching RDPrep.app..."
           open "$APP_PATH"
 
-          echo "Waiting for app window (up to 120s)..."
+          echo "Waiting 120s for app to render..."
+          WINDOW_SEEN=false
           for i in $(seq 1 24); do
-            if osascript -e 'tell application "System Events" to get name of every window of process "RDPrep"' 2>/dev/null | grep -q .; then
-              echo "Window detected after ${i}x5s"
-              sleep 5
-              break
-            fi
-            echo "  waiting... ${i}x5s"
             sleep 5
+            if [[ "$WINDOW_SEEN" == false ]] && osascript -e 'tell application "System Events" to get name of every window of process "RDPrep"' 2>/dev/null | grep -q .; then
+              echo "Window detected after ${i}x5s"
+              WINDOW_SEEN=true
+            fi
+            echo "  waited ${i}x5s"
           done
 
           echo "Capturing screenshot..."
@@ -488,15 +488,15 @@ jobs:
           echo "Launching RDPrep.app..."
           open "$APP_PATH"
 
-          echo "Waiting for app window (up to 120s)..."
+          echo "Waiting 120s for app to render..."
+          WINDOW_SEEN=false
           for i in $(seq 1 24); do
-            if osascript -e 'tell application "System Events" to get name of every window of process "RDPrep"' 2>/dev/null | grep -q .; then
-              echo "Window detected after ${i}x5s"
-              sleep 5
-              break
-            fi
-            echo "  waiting... ${i}x5s"
             sleep 5
+            if [[ "$WINDOW_SEEN" == false ]] && osascript -e 'tell application "System Events" to get name of every window of process "RDPrep"' 2>/dev/null | grep -q .; then
+              echo "Window detected after ${i}x5s"
+              WINDOW_SEEN=true
+            fi
+            echo "  waited ${i}x5s"
           done
 
           echo "Capturing screenshot..."

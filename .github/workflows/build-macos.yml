@@ -112,27 +112,10 @@ jobs:
             echo "WARNING: main.min.js not found"
           fi
 
-      - name: Patch main.js (Electron 22 compat + devtools hidden but enabled + main process logging)
+      - name: Patch main.js
         run: |
           PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
-          node -e '
-            const fs = require("fs");
-            const path = `${process.argv[1]}/main.js`;
-            let source = fs.readFileSync(path, "utf8");
-
-            source = source.replace(/nodeIntegration:\s*!0,(?!\s*\n\s*contextIsolation:)/g,
-              "nodeIntegration: !0,\n\t\t\tcontextIsolation: !1,\n\t\t\tsandbox: !1,");
-
-            source = source.replace("devTools: !!serve", "devTools: true");
-
-            source = source.replace(
-              "function createWindow() {",
-              "function createWindow() {\n\tconst origLog = console.log;\n\tconst origErr = console.error;\n\tconsole.log = function() {\n\t\torigLog.apply(console, arguments);\n\t\ttry { if (win && win.webContents) win.webContents.executeJavaScript(\"console.log(\\\"[main]\\\",\" + JSON.stringify(Array.from(arguments).join(\" \")) + \")\"); } catch(e) {}\n\t};\n\tconsole.error = function() {\n\t\torigErr.apply(console, arguments);\n\t\ttry { if (win && win.webContents) win.webContents.executeJavaScript(\"console.error(\\\"[main]\\\",\" + JSON.stringify(Array.from(arguments).join(\" \")) + \")\"); } catch(e) {}\n\t};"
-            );
-
-            fs.writeFileSync(path, source);
-            console.log("Patched: renderer compat + devtools enabled (hidden, Alt+I) + main→renderer logging");
-          ' "$PROJECT_DIR"
+          node "$GITHUB_WORKSPACE/scripts/patch-main.js" "$PROJECT_DIR/main.js"
 
       - name: Patch package.json for macOS
         run: |
@@ -436,6 +419,7 @@ jobs:
 
             Ad-hoc signed, not Apple-notarized.
             Press **Alt+I** to open DevTools.
+            In DevTools console: `setProxy("http://host:port")` to set proxy, `setProxy(null)` to clear.
           files: |
             release-artifacts/**/*.dmg
             screenshots/**/*.png

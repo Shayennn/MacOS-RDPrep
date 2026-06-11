@@ -134,7 +134,7 @@ jobs:
 
   build-arm64:
     needs: unpack
-    runs-on: macos-latest
+    runs-on: macos-14-arm64
     steps:
       - name: Download unpacked project
         uses: actions/download-artifact@v4
@@ -186,11 +186,23 @@ jobs:
             fs.writeFileSync(f, JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')), null, 2) + '\n');
           " rdprep-mac/electron-builder-mac.json
 
-      - name: Install npm dependencies
+      - name: Install npm dependencies (arm64)
         working-directory: rdprep-mac
+        env:
+          npm_config_arch: arm64
+          npm_config_target_arch: arm64
         run: |
-          npm install --ignore-scripts
-          npx electron-rebuild -f -w sqlite3 bcrypt
+          rm -rf node_modules
+          npm install
+          npx electron-rebuild -f -w sqlite3 -w bcrypt --arch=arm64
+
+          SQLITE_BINDING="node_modules/sqlite3/lib/binding/napi-v3-darwin-arm64/node_sqlite3.node"
+          if [[ ! -f "$SQLITE_BINDING" ]]; then
+            echo "Missing sqlite3 arm64 binding: $SQLITE_BINDING"
+            find node_modules/sqlite3/lib/binding -name node_sqlite3.node -print 2>/dev/null || true
+            exit 1
+          fi
+          find node_modules/sqlite3/lib/binding -name node_sqlite3.node -print
 
       - name: Build macOS DMG (arm64)
         working-directory: rdprep-mac
@@ -208,8 +220,15 @@ jobs:
             APP_PATH=$(find rdprep-mac/release -name "RDPrep.app" -type d | head -1)
           fi
           if [[ -z "$APP_PATH" ]]; then
-            echo "RDPrep.app not found, skipping screenshot"
-            exit 0
+            echo "RDPrep.app not found"
+            exit 1
+          fi
+
+          SQLITE_BINDING="$APP_PATH/Contents/Resources/app/node_modules/sqlite3/lib/binding/napi-v3-darwin-arm64/node_sqlite3.node"
+          if [[ ! -f "$SQLITE_BINDING" ]]; then
+            echo "Missing packaged sqlite3 arm64 binding: $SQLITE_BINDING"
+            find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3/lib/binding" -name node_sqlite3.node -print 2>/dev/null || true
+            exit 1
           fi
 
           echo "Removing quarantine attributes..."
@@ -331,11 +350,23 @@ jobs:
             fs.writeFileSync(f, JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')), null, 2) + '\n');
           " rdprep-mac/electron-builder-mac.json
 
-      - name: Install npm dependencies
+      - name: Install npm dependencies (x64)
         working-directory: rdprep-mac
+        env:
+          npm_config_arch: x64
+          npm_config_target_arch: x64
         run: |
-          npm install --ignore-scripts
-          npx electron-rebuild -f -w sqlite3 bcrypt
+          rm -rf node_modules
+          npm install
+          npx electron-rebuild -f -w sqlite3 -w bcrypt --arch=x64
+
+          SQLITE_BINDING="node_modules/sqlite3/lib/binding/napi-v3-darwin-x64/node_sqlite3.node"
+          if [[ ! -f "$SQLITE_BINDING" ]]; then
+            echo "Missing sqlite3 x64 binding: $SQLITE_BINDING"
+            find node_modules/sqlite3/lib/binding -name node_sqlite3.node -print 2>/dev/null || true
+            exit 1
+          fi
+          find node_modules/sqlite3/lib/binding -name node_sqlite3.node -print
 
       - name: Build macOS DMG (x64)
         working-directory: rdprep-mac
@@ -353,8 +384,15 @@ jobs:
             APP_PATH=$(find rdprep-mac/release -name "RDPrep.app" -type d | head -1)
           fi
           if [[ -z "$APP_PATH" ]]; then
-            echo "RDPrep.app not found, skipping screenshot"
-            exit 0
+            echo "RDPrep.app not found"
+            exit 1
+          fi
+
+          SQLITE_BINDING="$APP_PATH/Contents/Resources/app/node_modules/sqlite3/lib/binding/napi-v3-darwin-x64/node_sqlite3.node"
+          if [[ ! -f "$SQLITE_BINDING" ]]; then
+            echo "Missing packaged sqlite3 x64 binding: $SQLITE_BINDING"
+            find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3/lib/binding" -name node_sqlite3.node -print 2>/dev/null || true
+            exit 1
           fi
 
           echo "Removing quarantine attributes..."

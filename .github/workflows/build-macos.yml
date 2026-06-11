@@ -201,6 +201,40 @@ jobs:
       - name: List build output
         run: find rdprep-mac/release -type f \( -name "*.dmg" -o -name "*.zip" \) -exec ls -lh {} \;
 
+      - name: Launch app and capture screenshot
+        run: |
+          APP_PATH=$(find rdprep-mac/release/mac -name "RDPrep.app" -type d | head -1)
+          if [[ -z "$APP_PATH" ]]; then
+            echo "RDPrep.app not found in release output"
+            find rdprep-mac/release -name "*.app" -type d
+            exit 1
+          fi
+
+          echo "Removing quarantine attributes..."
+          sudo xattr -cr "$APP_PATH"
+
+          echo "Launching RDPrep.app..."
+          open "$APP_PATH"
+
+          echo "Waiting for app to render (10s)..."
+          sleep 10
+
+          echo "Capturing screenshot..."
+          screencapture -x rdprep-screenshot.png
+
+          echo "Closing app..."
+          osascript -e 'tell application "RDPrep" to quit' 2>/dev/null || true
+          sleep 2
+
+          ls -lh rdprep-screenshot.png
+
+      - name: Upload screenshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RDPrep-screenshot-${{ needs.unpack.outputs.version }}
+          path: rdprep-screenshot.png
+          retention-days: 30
+
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
@@ -228,5 +262,6 @@ jobs:
           files: |
             rdprep-mac/release/*.dmg
             rdprep-mac/release/*.zip
+            rdprep-screenshot.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

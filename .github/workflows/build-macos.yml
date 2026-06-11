@@ -112,7 +112,7 @@ jobs:
             echo "WARNING: main.min.js not found"
           fi
 
-      - name: Patch main.js (Electron 22 compat + devtools + main process logging)
+      - name: Patch main.js (Electron 22 compat + devtools hidden but enabled + main process logging)
         run: |
           PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
           node -e '
@@ -124,14 +124,11 @@ jobs:
             source = source.replace(/nodeIntegration:\s*!0,(?!\s*\n\s*contextIsolation:)/g,
               "nodeIntegration: !0,\n\t\t\tcontextIsolation: !1,\n\t\t\tsandbox: !1,");
 
-            // Enable devtools in production
+            // Enable devtools in production (hidden by default, open via Alt+I)
             source = source.replace("devTools: !!serve", "devTools: true");
 
-            // Auto-open devtools on launch
-            source = source.replace(
-              "serve && win.webContents.openDevTools()",
-              "win.webContents.openDevTools()"
-            );
+            // Remove auto-open of devtools (keep serve-only behavior)
+            // serve && win.webContents.openDevTools() stays as-is since serve=false in production
 
             // Forward main process console.log to renderer devtools
             source = source.replace(
@@ -140,7 +137,7 @@ jobs:
             );
 
             fs.writeFileSync(path, source);
-            console.log("Patched: renderer compat + devtools + main→renderer logging");
+            console.log("Patched: renderer compat + devtools enabled (hidden) + main→renderer logging");
           ' "$PROJECT_DIR"
 
       - name: Patch package.json for macOS
@@ -157,6 +154,10 @@ jobs:
             pkg.dependencies = pkg.dependencies || {};
             pkg.dependencies.sqlite3 = "5.1.7";
             pkg.dependencies.bcrypt = "5.1.1";
+            pkg.dependencies.request = "^2.88.2";
+            pkg.dependencies.qs = "^6.11.0";
+            pkg.dependencies.moment = "^2.29.4";
+            pkg.dependencies["electron-reload"] = "^2.0.0-alpha.1";
             pkg.devDependencies = pkg.devDependencies || {};
             pkg.devDependencies.electron = "^22.3.27";
             pkg.devDependencies["electron-builder"] = "^24.13.3";

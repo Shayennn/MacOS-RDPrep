@@ -18,17 +18,14 @@ env:
   DEFAULT_DOWNLOAD_URL: 'https://rdserverdoc.rd.go.th/prog_download/RDPrep_1.3.2_win_x64.exe'
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
-
+  unpack:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.config.outputs.version }}
+      url: ${{ steps.config.outputs.url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
 
       - name: Determine download URL and version
         id: config
@@ -45,59 +42,57 @@ jobs:
           echo "Download URL: $URL"
           echo "Version: $VER"
 
-      - name: Install dependencies
-        run: |
-          brew install p7zip
+      - name: Install 7z
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full
 
       - name: Download RDPrep installer
         run: |
           curl -L -o RDPrep.exe "${{ steps.config.outputs.url }}"
           ls -lh RDPrep.exe
 
-      - name: Unpack NSIS installer
+      - name: Unpack NSIS → Electron app
         run: |
-          mkdir -p /tmp/rdprep-nsis
-          7z x -o/tmp/rdprep-nsis RDPrep.exe -y
+          TMPDIR=$(mktemp -d)
 
-          echo "--- NSIS contents ---"
-          find /tmp/rdprep-nsis -name 'app-*.7z' -type f
+          7z x -o"$TMPDIR/nsis" RDPrep.exe -y > /dev/null
 
-          APP_7Z=$(find /tmp/rdprep-nsis -name 'app-*.7z' -type f | head -1)
+          APP_7Z=$(find "$TMPDIR/nsis" -name 'app-*.7z' -type f | head -1)
           if [[ -z "$APP_7Z" ]]; then
-            echo "ERROR: app-*.7z not found in NSIS archive"
-            find /tmp/rdprep-nsis -type f | head -20
+            echo "ERROR: app-*.7z not found"
+            find "$TMPDIR/nsis" -type f | head -20
             exit 1
           fi
 
-          mkdir -p /tmp/rdprep-app
-          7z x -o/tmp/rdprep-app "$APP_7Z" -y
-          echo "--- App contents ---"
-          ls /tmp/rdprep-app/resources/app/ | head -20
+          7z x -o"$TMPDIR/app" "$APP_7Z" -y > /dev/null
 
-      - name: Create macOS project
-        run: |
-          PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
-          mkdir -p "$PROJECT_DIR"
-
-          cp -a /tmp/rdprep-app/resources/app/. "$PROJECT_DIR/"
-
-          if [[ -f /tmp/rdprep-app/resources/elevate.exe ]]; then
-            cp /tmp/rdprep-app/resources/elevate.exe "$PROJECT_DIR/"
+          if [[ ! -d "$TMPDIR/app/resources/app" ]]; then
+            echo "ERROR: resources/app/ not found"
+            exit 1
           fi
 
-          LICENSE_FILE=$(find /tmp/rdprep-nsis -name "license.html" -type f | head -1)
+          PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
+          mkdir -p "$PROJECT_DIR"
+          cp -a "$TMPDIR/app/resources/app/." "$PROJECT_DIR/"
+
+          if [[ -f "$TMPDIR/app/resources/elevate.exe" ]]; then
+            cp "$TMPDIR/app/resources/elevate.exe" "$PROJECT_DIR/"
+          fi
+
+          LICENSE_FILE=$(find "$TMPDIR/nsis" -name "license.html" -type f | head -1)
           if [[ -n "$LICENSE_FILE" ]]; then
             mkdir -p "$PROJECT_DIR/build"
             cp "$LICENSE_FILE" "$PROJECT_DIR/build/License.html"
           fi
 
+          rm -rf "$TMPDIR" RDPrep.exe
+
           echo "--- Project created ---"
           du -sh "$PROJECT_DIR"
+          ls "$PROJECT_DIR/" | head -20
 
-      - name: Beautify main.js
+      - name: Beautify main.min.js → main.js
         run: |
           PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
-
           npm install -g js-beautify
 
           if [[ -f "$PROJECT_DIR/main.min.js" ]]; then
@@ -113,93 +108,78 @@ jobs:
             echo "WARNING: main.min.js not found"
           fi
 
-      - name: Update package.json for macOS
+      - name: Patch package.json for macOS
         run: |
           PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
-
           node -e '
             const fs = require("fs");
-            const path = process.argv[1];
-            const pkg = JSON.parse(fs.readFileSync(path, "utf8"));
-
+            const pkg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
             pkg.main = "main.js";
             pkg.version = process.argv[2];
-
             pkg.scripts = pkg.scripts || {};
             pkg.scripts.start = "electron .";
             pkg.scripts["build:mac"] = "electron-builder --mac --config electron-builder-mac.json";
-
             pkg.devDependencies = pkg.devDependencies || {};
             pkg.devDependencies.electron = "^22.3.27";
             pkg.devDependencies["electron-builder"] = "^24.13.3";
-
-            fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + "\n");
-            console.log("Updated: main=" + pkg.main + " version=" + pkg.version);
+            fs.writeFileSync(process.argv[1], JSON.stringify(pkg, null, 2) + "\n");
           ' "$PROJECT_DIR/package.json" "${{ steps.config.outputs.version }}"
 
-      - name: Create electron-builder macOS config
+      - name: Write electron-builder macOS config
         run: |
-          PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
-          cat > "$PROJECT_DIR/electron-builder-mac.json" <<'EOF'
+          cat > "$GITHUB_WORKSPACE/rdprep-mac/electron-builder-mac.json" <<'JSON'
           {
             "productName": "RDPrep",
             "appId": "rd.co.th.rd-efiling-app",
             "compression": "maximum",
             "artifactName": "RDPrep_${version}_${os}_${arch}.${ext}",
             "asar": false,
-            "directories": {
-              "output": "release/"
-            },
+            "directories": { "output": "release/" },
             "files": [
               "**/*",
               "build/icon.*",
-              "!jsign-4.0.jar",
-              "!hardwareToken.cfg",
-              "!command-pkcs11.txt",
-              "!sign.js",
               "!main.js.map",
               "!main.min.js",
               "!**/*.js.map",
               "!**/*.ts",
-              "!*.code-workspace",
-              "!LICENSE.md",
-              "!package-lock.json",
-              "!temp",
-              "!src/",
-              "!e2e/",
-              "!hooks/",
-              "!angular.json",
-              "!_config.yml",
-              "!karma.conf.js",
-              "!tsconfig.json",
-              "!tslint.json",
-              "!release/",
-              "!README.md",
-              "!update/local-config-update.json",
-              "!local-config.json",
               "!elevate.exe"
             ],
             "mac": {
               "icon": "build/icon.icns",
-              "target": [
-                {
-                  "target": "dmg",
-                  "arch": ["x64"]
-                }
-              ],
+              "target": [{ "target": "dmg", "arch": ["x64"] }],
               "category": "public.app-category.finance",
               "hardenedRuntime": false,
               "gatekeeperAssess": false
             }
           }
-          EOF
-          # Fix indentation
+          JSON
           node -e "
             const fs = require('fs');
-            const f = '$PROJECT_DIR/electron-builder-mac.json';
-            const c = JSON.parse(fs.readFileSync(f, 'utf8'));
-            fs.writeFileSync(f, JSON.stringify(c, null, 2) + '\n');
-          "
+            const f = process.argv[1];
+            fs.writeFileSync(f, JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')), null, 2) + '\n');
+          " "$GITHUB_WORKSPACE/rdprep-mac/electron-builder-mac.json"
+
+      - name: Upload unpacked project
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdprep-unpacked
+          path: rdprep-mac/
+          retention-days: 1
+
+  build-macos:
+    needs: unpack
+    runs-on: macos-latest
+    steps:
+      - name: Download unpacked project
+        uses: actions/download-artifact@v4
+        with:
+          name: rdprep-unpacked
+          path: rdprep-mac/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
 
       - name: Install npm dependencies
         working-directory: rdprep-mac
@@ -209,52 +189,39 @@ jobs:
 
       - name: Build macOS DMG
         working-directory: rdprep-mac
-        run: |
-          npx electron-builder --mac --config electron-builder-mac.json --x64
+        run: npx electron-builder --mac --config electron-builder-mac.json --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: List build output
-        run: |
-          echo "=== Build Output ==="
-          find "$GITHUB_WORKSPACE/rdprep-mac/release" -type f \( -name "*.dmg" -o -name "*.zip" \) -exec ls -lh {} \;
+        run: find rdprep-mac/release -type f \( -name "*.dmg" -o -name "*.zip" \) -exec ls -lh {} \;
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RDPrep-macOS-${{ steps.config.outputs.version }}
+          name: RDPrep-macOS-${{ needs.unpack.outputs.version }}
           path: rdprep-mac/release/*.dmg
           retention-days: 30
 
       - name: Create GitHub Release
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v${{ steps.config.outputs.version }}-macos"
-          name: "RDPrep ${{ steps.config.outputs.version }} (macOS)"
+          tag_name: "v${{ needs.unpack.outputs.version }}-macos"
+          name: "RDPrep ${{ needs.unpack.outputs.version }} (macOS)"
           body: |
-            ## RDPrep ${{ steps.config.outputs.version }} - macOS Build
-
-            Cross-compiled from the Windows NSIS installer.
+            ## RDPrep ${{ needs.unpack.outputs.version }} - macOS
 
             ### Installation
-            1. Download `RDPrep_${{ steps.config.outputs.version }}_mac_x64.dmg`
-            2. Open the DMG and drag RDPrep to Applications
-            3. On first launch, right-click → Open (unsigned app)
-            4. Native modules (sqlite3, bcrypt) are rebuilt for macOS
+            1. Download the DMG below
+            2. Open and drag RDPrep to Applications
+            3. First launch: right-click → Open (unsigned app)
 
             ### Source
-            - Original installer: `${{ steps.config.outputs.url }}`
-            - Built on: `macos-latest` (GitHub Actions)
+            - Original: `${{ needs.unpack.outputs.url }}`
+            - Built on: `macos-latest` via GitHub Actions
             - Electron: 22.3.27
           files: |
             rdprep-mac/release/*.dmg
             rdprep-mac/release/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cleanup
-        if: always()
-        run: |
-          rm -f RDPrep.exe
-          rm -rf /tmp/rdprep-nsis /tmp/rdprep-app

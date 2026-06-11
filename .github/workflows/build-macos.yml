@@ -218,8 +218,16 @@ jobs:
           echo "Launching RDPrep.app..."
           open "$APP_PATH"
 
-          echo "Waiting for app to render (30s)..."
-          sleep 30
+          echo "Waiting for app window (up to 120s)..."
+          for i in $(seq 1 24); do
+            if osascript -e 'tell application "System Events" to get name of every window of process "RDPrep"' 2>/dev/null | grep -q .; then
+              echo "Window detected after ${i}x5s"
+              sleep 5
+              break
+            fi
+            echo "  waiting... ${i}x5s"
+            sleep 5
+          done
 
           echo "Capturing screenshot..."
           screencapture -x rdprep-screenshot-arm64.png
@@ -355,8 +363,16 @@ jobs:
           echo "Launching RDPrep.app..."
           open "$APP_PATH"
 
-          echo "Waiting for app to render (30s)..."
-          sleep 30
+          echo "Waiting for app window (up to 120s)..."
+          for i in $(seq 1 24); do
+            if osascript -e 'tell application "System Events" to get name of every window of process "RDPrep"' 2>/dev/null | grep -q .; then
+              echo "Window detected after ${i}x5s"
+              sleep 5
+              break
+            fi
+            echo "  waiting... ${i}x5s"
+            sleep 5
+          done
 
           echo "Capturing screenshot..."
           screencapture -x rdprep-screenshot-x64.png

@@ -182,6 +182,7 @@ jobs:
             "nodeGypRebuild": false,
             "buildDependenciesFromSource": false,
             "directories": { "output": "release/" },
+            "afterPack": "scripts/after-pack.js",
             "publish": {
               "provider": "github",
               "owner": "Shayennn",
@@ -194,9 +195,11 @@ jobs:
               "!main.min.js",
               "!**/*.js.map",
               "!**/*.ts",
+              "!scripts/after-pack.js",
               "!elevate.exe"
             ],
             "mac": {
+              "identity": null,
               "icon": "build/icon.icns",
               "target": [{ "target": "dmg", "arch": ["arm64"] }],
               "category": "public.app-category.finance",
@@ -210,6 +213,39 @@ jobs:
             const f = process.argv[1];
             fs.writeFileSync(f, JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')), null, 2) + '\n');
           " rdprep-mac/electron-builder-mac.json
+
+      - name: Write ad-hoc signing hook (arm64)
+        run: |
+          mkdir -p rdprep-mac/scripts
+          cat > rdprep-mac/scripts/after-pack.js <<'EOF'
+          const { execFileSync } = require('child_process');
+          const path = require('path');
+
+          exports.default = async function afterPack(context) {
+            const appPath = path.join(
+              context.appOutDir,
+              `${context.packager.appInfo.productFilename}.app`
+            );
+
+            console.log(`Ad-hoc signing ${appPath}`);
+            execFileSync('codesign', [
+              '--force',
+              '--deep',
+              '--sign',
+              '-',
+              '--timestamp=none',
+              appPath,
+            ], { stdio: 'inherit' });
+
+            execFileSync('codesign', [
+              '--verify',
+              '--deep',
+              '--strict',
+              '--verbose=2',
+              appPath,
+            ], { stdio: 'inherit' });
+          };
+          EOF
 
       - name: Install npm dependencies (arm64)
         working-directory: rdprep-mac
@@ -266,6 +302,11 @@ jobs:
             echo "RDPrep.app not found"
             exit 1
           fi
+
+          echo "Verifying app signature..."
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          codesign --display --verbose=4 "$APP_PATH" 2>&1 | grep -E "Identifier=|Authority=|Signature=|TeamIdentifier=" || true
+          spctl --assess --type execute --verbose=4 "$APP_PATH" || true
 
           SQLITE_BINDING=$(find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3" -name node_sqlite3.node -print -quit 2>/dev/null || true)
           if [[ -z "$SQLITE_BINDING" ]]; then
@@ -345,7 +386,11 @@ jobs:
             ### Installation
             1. Download the DMG below
             2. Open and drag RDPrep to Applications
-            3. First launch: right-click → Open (unsigned app)
+            3. First launch: right-click → Open
+            4. If macOS says the app is damaged, remove quarantine:
+               `sudo xattr -dr com.apple.quarantine /Applications/RDPrep.app`
+
+            This build is ad-hoc signed for integrity, but it is not Apple-notarized.
 
             ### Source
             - Original: `${{ needs.unpack.outputs.url }}`
@@ -386,6 +431,7 @@ jobs:
             "nodeGypRebuild": false,
             "buildDependenciesFromSource": false,
             "directories": { "output": "release/" },
+            "afterPack": "scripts/after-pack.js",
             "publish": {
               "provider": "github",
               "owner": "Shayennn",
@@ -398,9 +444,11 @@ jobs:
               "!main.min.js",
               "!**/*.js.map",
               "!**/*.ts",
+              "!scripts/after-pack.js",
               "!elevate.exe"
             ],
             "mac": {
+              "identity": null,
               "icon": "build/icon.icns",
               "target": [{ "target": "dmg", "arch": ["x64"] }],
               "category": "public.app-category.finance",
@@ -414,6 +462,39 @@ jobs:
             const f = process.argv[1];
             fs.writeFileSync(f, JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')), null, 2) + '\n');
           " rdprep-mac/electron-builder-mac.json
+
+      - name: Write ad-hoc signing hook (x64)
+        run: |
+          mkdir -p rdprep-mac/scripts
+          cat > rdprep-mac/scripts/after-pack.js <<'EOF'
+          const { execFileSync } = require('child_process');
+          const path = require('path');
+
+          exports.default = async function afterPack(context) {
+            const appPath = path.join(
+              context.appOutDir,
+              `${context.packager.appInfo.productFilename}.app`
+            );
+
+            console.log(`Ad-hoc signing ${appPath}`);
+            execFileSync('codesign', [
+              '--force',
+              '--deep',
+              '--sign',
+              '-',
+              '--timestamp=none',
+              appPath,
+            ], { stdio: 'inherit' });
+
+            execFileSync('codesign', [
+              '--verify',
+              '--deep',
+              '--strict',
+              '--verbose=2',
+              appPath,
+            ], { stdio: 'inherit' });
+          };
+          EOF
 
       - name: Install npm dependencies (x64)
         working-directory: rdprep-mac
@@ -470,6 +551,11 @@ jobs:
             echo "RDPrep.app not found"
             exit 1
           fi
+
+          echo "Verifying app signature..."
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          codesign --display --verbose=4 "$APP_PATH" 2>&1 | grep -E "Identifier=|Authority=|Signature=|TeamIdentifier=" || true
+          spctl --assess --type execute --verbose=4 "$APP_PATH" || true
 
           SQLITE_BINDING=$(find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3" -name node_sqlite3.node -print -quit 2>/dev/null || true)
           if [[ -z "$SQLITE_BINDING" ]]; then
@@ -549,7 +635,11 @@ jobs:
             ### Installation
             1. Download the DMG below
             2. Open and drag RDPrep to Applications
-            3. First launch: right-click → Open (unsigned app)
+            3. First launch: right-click → Open
+            4. If macOS says the app is damaged, remove quarantine:
+               `sudo xattr -dr com.apple.quarantine /Applications/RDPrep.app`
+
+            This build is ad-hoc signed for integrity, but it is not Apple-notarized.
 
             ### Source
             - Original: `${{ needs.unpack.outputs.url }}`

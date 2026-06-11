@@ -154,9 +154,37 @@ jobs:
           path: rdprep-mac/
           retention-days: 1
 
-  build-arm64:
+  build:
     needs: unpack
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            variant: secure
+            npm_arch: arm64
+            electron_flag: --arm64
+            artifact_suffix: arm64
+            label: Apple Silicon
+          - arch: arm64
+            variant: insecured
+            npm_arch: arm64
+            electron_flag: --arm64
+            artifact_suffix: arm64-insecured
+            label: Apple Silicon (Insecured)
+          - arch: x64
+            variant: secure
+            npm_arch: x64
+            electron_flag: --x64
+            artifact_suffix: x64
+            label: Intel
+          - arch: x64
+            variant: insecured
+            npm_arch: x64
+            electron_flag: --x64
+            artifact_suffix: x64-insecured
+            label: Intel (Insecured)
     steps:
       - name: Download unpacked project
         uses: actions/download-artifact@v4
@@ -169,14 +197,27 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Write electron-builder config (arm64)
+      - name: Patch SSL verification (insecured variant)
+        if: matrix.variant == 'insecured'
         run: |
-          cat > rdprep-mac/electron-builder-mac.json <<'EOF'
+          PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
+          echo "Patching main.js to disable SSL verification globally..."
+          sed -i '' '1s/^/process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";\n/' "$PROJECT_DIR/main.js"
+          head -3 "$PROJECT_DIR/main.js"
+          echo "Patched: NODE_TLS_REJECT_UNAUTHORIZED=0 prepended to main.js"
+
+      - name: Write electron-builder config
+        run: |
+          SUFFIX=""
+          if [[ "${{ matrix.variant }}" == "insecured" ]]; then
+            SUFFIX="-insecured"
+          fi
+          cat > rdprep-mac/electron-builder-mac.json <<BUILDEREOF
           {
             "productName": "RDPrep",
             "appId": "rd.co.th.rd-efiling-app",
             "compression": "maximum",
-            "artifactName": "RDPrep_${version}_${os}_${arch}.${ext}",
+            "artifactName": "RDPrep_\${version}_\${os}_\${arch}${SUFFIX}.\${ext}",
             "asar": false,
             "npmRebuild": false,
             "nodeGypRebuild": false,
@@ -201,20 +242,22 @@ jobs:
             "mac": {
               "identity": null,
               "icon": "build/icon.icns",
-              "target": [{ "target": "dmg", "arch": ["arm64"] }],
+              "target": [{ "target": "dmg", "arch": ["${{ matrix.arch }}"] }],
               "category": "public.app-category.finance",
               "hardenedRuntime": false,
               "gatekeeperAssess": false
             }
           }
-          EOF
+          BUILDEREOF
           node -e "
             const fs = require('fs');
             const f = process.argv[1];
             fs.writeFileSync(f, JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')), null, 2) + '\n');
           " rdprep-mac/electron-builder-mac.json
+          echo "Config for ${{ matrix.arch }} (${{ matrix.variant }}):"
+          cat rdprep-mac/electron-builder-mac.json
 
-      - name: Write ad-hoc signing hook (arm64)
+      - name: Write ad-hoc signing hook
         run: |
           mkdir -p rdprep-mac/scripts
           cat > rdprep-mac/scripts/after-pack.js <<'EOF'
@@ -247,11 +290,11 @@ jobs:
           };
           EOF
 
-      - name: Install npm dependencies (arm64)
+      - name: Install npm dependencies
         working-directory: rdprep-mac
         env:
-          npm_config_arch: arm64
-          npm_config_target_arch: arm64
+          npm_config_arch: ${{ matrix.npm_arch }}
+          npm_config_target_arch: ${{ matrix.npm_arch }}
         run: |
           rm -rf node_modules
           rm -f package-lock.json
@@ -265,256 +308,11 @@ jobs:
           fi
           SQLITE_ARCHS=$(lipo -archs "$SQLITE_BINDING" 2>/dev/null || true)
           echo "sqlite3 binding: $SQLITE_BINDING ($SQLITE_ARCHS)"
-          if [[ "$SQLITE_ARCHS" != *"arm64"* ]]; then
+          if [[ "${{ matrix.arch }}" == "arm64" && "$SQLITE_ARCHS" != *"arm64"* ]]; then
             echo "sqlite3 binding is not arm64"
             exit 1
           fi
-
-          BCRYPT_BINDING=$(find node_modules/bcrypt/lib/binding -name bcrypt_lib.node -print -quit 2>/dev/null || true)
-          if [[ -z "$BCRYPT_BINDING" ]]; then
-            echo "Missing bcrypt native binding"
-            find node_modules/bcrypt/lib/binding -name "*.node" -print 2>/dev/null || true
-            exit 1
-          fi
-          BCRYPT_ARCHS=$(lipo -archs "$BCRYPT_BINDING" 2>/dev/null || true)
-          echo "bcrypt binding: $BCRYPT_BINDING ($BCRYPT_ARCHS)"
-          if [[ "$BCRYPT_ARCHS" != *"arm64"* ]]; then
-            echo "bcrypt binding is not arm64"
-            exit 1
-          fi
-
-      - name: Build macOS DMG (arm64)
-        working-directory: rdprep-mac
-        run: npx electron-builder --mac --config electron-builder-mac.json --arm64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: List build output
-        run: find rdprep-mac/release -type f \( -name "*.dmg" -o -name "*.zip" \) -exec ls -lh {} \;
-
-      - name: Launch app and capture screenshot
-        run: |
-          APP_PATH=$(find rdprep-mac/release/mac-arm64 -name "RDPrep.app" -type d | head -1)
-          if [[ -z "$APP_PATH" ]]; then
-            APP_PATH=$(find rdprep-mac/release -name "RDPrep.app" -type d | head -1)
-          fi
-          if [[ -z "$APP_PATH" ]]; then
-            echo "RDPrep.app not found"
-            exit 1
-          fi
-
-          echo "Verifying app signature..."
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-          codesign --display --verbose=4 "$APP_PATH" 2>&1 | grep -E "Identifier=|Authority=|Signature=|TeamIdentifier=" || true
-          spctl --assess --type execute --verbose=4 "$APP_PATH" || true
-
-          SQLITE_BINDING=$(find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3" -name node_sqlite3.node -print -quit 2>/dev/null || true)
-          if [[ -z "$SQLITE_BINDING" ]]; then
-            echo "Missing packaged sqlite3 native binding"
-            find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3" -name "*.node" -print 2>/dev/null || true
-            exit 1
-          fi
-          SQLITE_ARCHS=$(lipo -archs "$SQLITE_BINDING" 2>/dev/null || true)
-          echo "packaged sqlite3 binding: $SQLITE_BINDING ($SQLITE_ARCHS)"
-          if [[ "$SQLITE_ARCHS" != *"arm64"* ]]; then
-            echo "packaged sqlite3 binding is not arm64"
-            exit 1
-          fi
-
-          BCRYPT_BINDING=$(find "$APP_PATH/Contents/Resources/app/node_modules/bcrypt/lib/binding" -name bcrypt_lib.node -print -quit 2>/dev/null || true)
-          if [[ -z "$BCRYPT_BINDING" ]]; then
-            echo "Missing packaged bcrypt native binding"
-            find "$APP_PATH/Contents/Resources/app/node_modules/bcrypt/lib/binding" -name "*.node" -print 2>/dev/null || true
-            exit 1
-          fi
-          BCRYPT_ARCHS=$(lipo -archs "$BCRYPT_BINDING" 2>/dev/null || true)
-          echo "packaged bcrypt binding: $BCRYPT_BINDING ($BCRYPT_ARCHS)"
-          if [[ "$BCRYPT_ARCHS" != *"arm64"* ]]; then
-            echo "packaged bcrypt binding is not arm64"
-            exit 1
-          fi
-
-          echo "Removing quarantine attributes..."
-          sudo xattr -cr "$APP_PATH"
-
-          echo "Launching RDPrep.app..."
-          open "$APP_PATH"
-
-          echo "Waiting for app window (max 120s)..."
-          for i in $(seq 1 24); do
-            if osascript -e 'tell application "System Events" to get name of every window of process "RDPrep"' 2>/dev/null | grep -q .; then
-              echo "Window detected after $((i*5))s"
-              sleep 3
-              break
-            fi
-            sleep 5
-            echo "  waiting... $((i*5))s"
-          done
-
-          echo "Capturing screenshot..."
-          screencapture -x rdprep-screenshot-arm64.png
-
-          echo "Closing app..."
-          osascript -e 'tell application "RDPrep" to quit' 2>/dev/null || true
-          sleep 2
-
-          ls -lh rdprep-screenshot-arm64.png
-
-      - name: Upload screenshot artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: RDPrep-screenshot-arm64-${{ needs.unpack.outputs.version }}
-          path: rdprep-screenshot-arm64.png
-          retention-days: 30
-
-      - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: RDPrep-macOS-arm64-${{ needs.unpack.outputs.version }}
-          path: rdprep-mac/release/*.dmg
-          retention-days: 30
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "v${{ needs.unpack.outputs.version }}-macos-arm64"
-          name: "RDPrep ${{ needs.unpack.outputs.version }} (macOS Apple Silicon)"
-          body: |
-            ## RDPrep ${{ needs.unpack.outputs.version }} - macOS Apple Silicon (arm64)
-
-            ### Installation
-            1. Download the DMG below
-            2. Open and drag RDPrep to Applications
-            3. First launch: right-click → Open
-            4. If macOS says the app is damaged, remove quarantine:
-               `sudo xattr -dr com.apple.quarantine /Applications/RDPrep.app`
-
-            This build is ad-hoc signed for integrity, but it is not Apple-notarized.
-
-            ### Source
-            - Original: `${{ needs.unpack.outputs.url }}`
-            - Built on: `macos-latest` targeting arm64 via GitHub Actions
-            - Electron: 22.3.27
-          files: |
-            rdprep-mac/release/*.dmg
-            rdprep-mac/release/*.zip
-            rdprep-screenshot-arm64.png
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-x64:
-    needs: unpack
-    runs-on: macos-latest
-    steps:
-      - name: Download unpacked project
-        uses: actions/download-artifact@v4
-        with:
-          name: rdprep-unpacked
-          path: rdprep-mac/
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Write electron-builder config (x64)
-        run: |
-          cat > rdprep-mac/electron-builder-mac.json <<'EOF'
-          {
-            "productName": "RDPrep",
-            "appId": "rd.co.th.rd-efiling-app",
-            "compression": "maximum",
-            "artifactName": "RDPrep_${version}_${os}_${arch}.${ext}",
-            "asar": false,
-            "npmRebuild": false,
-            "nodeGypRebuild": false,
-            "buildDependenciesFromSource": false,
-            "directories": { "output": "release/" },
-            "afterPack": "scripts/after-pack.js",
-            "publish": {
-              "provider": "github",
-              "owner": "Shayennn",
-              "repo": "MacOS-RDPrep"
-            },
-            "files": [
-              "**/*",
-              "build/icon.*",
-              "!main.js.map",
-              "!main.min.js",
-              "!**/*.js.map",
-              "!**/*.ts",
-              "!scripts/after-pack.js",
-              "!elevate.exe"
-            ],
-            "mac": {
-              "identity": null,
-              "icon": "build/icon.icns",
-              "target": [{ "target": "dmg", "arch": ["x64"] }],
-              "category": "public.app-category.finance",
-              "hardenedRuntime": false,
-              "gatekeeperAssess": false
-            }
-          }
-          EOF
-          node -e "
-            const fs = require('fs');
-            const f = process.argv[1];
-            fs.writeFileSync(f, JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')), null, 2) + '\n');
-          " rdprep-mac/electron-builder-mac.json
-
-      - name: Write ad-hoc signing hook (x64)
-        run: |
-          mkdir -p rdprep-mac/scripts
-          cat > rdprep-mac/scripts/after-pack.js <<'EOF'
-          const { execFileSync } = require('child_process');
-          const path = require('path');
-
-          exports.default = async function afterPack(context) {
-            const appPath = path.join(
-              context.appOutDir,
-              `${context.packager.appInfo.productFilename}.app`
-            );
-
-            console.log(`Ad-hoc signing ${appPath}`);
-            execFileSync('codesign', [
-              '--force',
-              '--deep',
-              '--sign',
-              '-',
-              '--timestamp=none',
-              appPath,
-            ], { stdio: 'inherit' });
-
-            execFileSync('codesign', [
-              '--verify',
-              '--deep',
-              '--strict',
-              '--verbose=2',
-              appPath,
-            ], { stdio: 'inherit' });
-          };
-          EOF
-
-      - name: Install npm dependencies (x64)
-        working-directory: rdprep-mac
-        env:
-          npm_config_arch: x64
-          npm_config_target_arch: x64
-        run: |
-          rm -rf node_modules
-          rm -f package-lock.json
-          npm install
-
-          SQLITE_BINDING=$(find node_modules/sqlite3 -name node_sqlite3.node -print -quit 2>/dev/null || true)
-          if [[ -z "$SQLITE_BINDING" ]]; then
-            echo "Missing sqlite3 native binding"
-            find node_modules/sqlite3 -name "*.node" -print 2>/dev/null || true
-            exit 1
-          fi
-          SQLITE_ARCHS=$(lipo -archs "$SQLITE_BINDING" 2>/dev/null || true)
-          echo "sqlite3 binding: $SQLITE_BINDING ($SQLITE_ARCHS)"
-          if [[ "$SQLITE_ARCHS" != *"x86_64"* ]]; then
+          if [[ "${{ matrix.arch }}" == "x64" && "$SQLITE_ARCHS" != *"x86_64"* ]]; then
             echo "sqlite3 binding is not x64"
             exit 1
           fi
@@ -527,14 +325,18 @@ jobs:
           fi
           BCRYPT_ARCHS=$(lipo -archs "$BCRYPT_BINDING" 2>/dev/null || true)
           echo "bcrypt binding: $BCRYPT_BINDING ($BCRYPT_ARCHS)"
-          if [[ "$BCRYPT_ARCHS" != *"x86_64"* ]]; then
+          if [[ "${{ matrix.arch }}" == "arm64" && "$BCRYPT_ARCHS" != *"arm64"* ]]; then
+            echo "bcrypt binding is not arm64"
+            exit 1
+          fi
+          if [[ "${{ matrix.arch }}" == "x64" && "$BCRYPT_ARCHS" != *"x86_64"* ]]; then
             echo "bcrypt binding is not x64"
             exit 1
           fi
 
-      - name: Build macOS DMG (x64)
+      - name: Build macOS DMG
         working-directory: rdprep-mac
-        run: npx electron-builder --mac --config electron-builder-mac.json --x64
+        run: npx electron-builder --mac --config electron-builder-mac.json ${{ matrix.electron_flag }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -543,10 +345,7 @@ jobs:
 
       - name: Launch app and capture screenshot
         run: |
-          APP_PATH=$(find rdprep-mac/release/mac -name "RDPrep.app" -type d | head -1)
-          if [[ -z "$APP_PATH" ]]; then
-            APP_PATH=$(find rdprep-mac/release -name "RDPrep.app" -type d | head -1)
-          fi
+          APP_PATH=$(find rdprep-mac/release -name "RDPrep.app" -type d | head -1)
           if [[ -z "$APP_PATH" ]]; then
             echo "RDPrep.app not found"
             exit 1
@@ -556,32 +355,6 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           codesign --display --verbose=4 "$APP_PATH" 2>&1 | grep -E "Identifier=|Authority=|Signature=|TeamIdentifier=" || true
           spctl --assess --type execute --verbose=4 "$APP_PATH" || true
-
-          SQLITE_BINDING=$(find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3" -name node_sqlite3.node -print -quit 2>/dev/null || true)
-          if [[ -z "$SQLITE_BINDING" ]]; then
-            echo "Missing packaged sqlite3 native binding"
-            find "$APP_PATH/Contents/Resources/app/node_modules/sqlite3" -name "*.node" -print 2>/dev/null || true
-            exit 1
-          fi
-          SQLITE_ARCHS=$(lipo -archs "$SQLITE_BINDING" 2>/dev/null || true)
-          echo "packaged sqlite3 binding: $SQLITE_BINDING ($SQLITE_ARCHS)"
-          if [[ "$SQLITE_ARCHS" != *"x86_64"* ]]; then
-            echo "packaged sqlite3 binding is not x64"
-            exit 1
-          fi
-
-          BCRYPT_BINDING=$(find "$APP_PATH/Contents/Resources/app/node_modules/bcrypt/lib/binding" -name bcrypt_lib.node -print -quit 2>/dev/null || true)
-          if [[ -z "$BCRYPT_BINDING" ]]; then
-            echo "Missing packaged bcrypt native binding"
-            find "$APP_PATH/Contents/Resources/app/node_modules/bcrypt/lib/binding" -name "*.node" -print 2>/dev/null || true
-            exit 1
-          fi
-          BCRYPT_ARCHS=$(lipo -archs "$BCRYPT_BINDING" 2>/dev/null || true)
-          echo "packaged bcrypt binding: $BCRYPT_BINDING ($BCRYPT_ARCHS)"
-          if [[ "$BCRYPT_ARCHS" != *"x86_64"* ]]; then
-            echo "packaged bcrypt binding is not x64"
-            exit 1
-          fi
 
           echo "Removing quarantine attributes..."
           sudo xattr -cr "$APP_PATH"
@@ -601,53 +374,96 @@ jobs:
           done
 
           echo "Capturing screenshot..."
-          screencapture -x rdprep-screenshot-x64.png
+          screencapture -x rdprep-screenshot-${{ matrix.artifact_suffix }}.png
 
           echo "Closing app..."
           osascript -e 'tell application "RDPrep" to quit' 2>/dev/null || true
           sleep 2
 
-          ls -lh rdprep-screenshot-x64.png
+          ls -lh rdprep-screenshot-${{ matrix.artifact_suffix }}.png
 
       - name: Upload screenshot artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RDPrep-screenshot-x64-${{ needs.unpack.outputs.version }}
-          path: rdprep-screenshot-x64.png
+          name: screenshot-${{ matrix.artifact_suffix }}
+          path: rdprep-screenshot-${{ matrix.artifact_suffix }}.png
           retention-days: 30
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RDPrep-macOS-x64-${{ needs.unpack.outputs.version }}
+          name: dmg-${{ matrix.artifact_suffix }}
           path: rdprep-mac/release/*.dmg
           retention-days: 30
+
+  release:
+    needs: [unpack, build]
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Download all DMG artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dmg-*
+          path: release-artifacts/
+          merge-multiple: true
+
+      - name: Download all screenshot artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: screenshot-*
+          path: screenshots/
+          merge-multiple: true
+
+      - name: List release files
+        run: |
+          echo "=== DMGs ==="
+          find release-artifacts/ -name "*.dmg" -exec ls -lh {} \;
+          echo "=== Screenshots ==="
+          find screenshots/ -name "*.png" -exec ls -lh {} \;
+
+      - name: Delete old releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "v${{ needs.unpack.outputs.version }}-macos" --yes --cleanup-tag 2>/dev/null || true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v${{ needs.unpack.outputs.version }}-macos-x64"
-          name: "RDPrep ${{ needs.unpack.outputs.version }} (macOS Intel)"
+          tag_name: "v${{ needs.unpack.outputs.version }}-macos"
+          name: "RDPrep ${{ needs.unpack.outputs.version }} (macOS)"
           body: |
-            ## RDPrep ${{ needs.unpack.outputs.version }} - macOS Intel (x64)
+            ## RDPrep ${{ needs.unpack.outputs.version }} - macOS
+
+            **4 variants available:**
+
+            | File | Arch | SSL | Notes |
+            |------|------|-----|-------|
+            | `RDPrep_*_arm64.dmg` | Apple Silicon | Normal | Standard build |
+            | `RDPrep_*_arm64-insecured.dmg` | Apple Silicon | **Disabled** | For corp SSL intercept |
+            | `RDPrep_*_x64.dmg` | Intel | Normal | Standard build |
+            | `RDPrep_*_x64-insecured.dmg` | Intel | **Disabled** | For corp SSL intercept |
 
             ### Installation
-            1. Download the DMG below
+            1. Download the DMG for your architecture
             2. Open and drag RDPrep to Applications
             3. First launch: right-click → Open
-            4. If macOS says the app is damaged, remove quarantine:
+            4. If macOS says the app is damaged:
                `sudo xattr -dr com.apple.quarantine /Applications/RDPrep.app`
 
-            This build is ad-hoc signed for integrity, but it is not Apple-notarized.
+            **Insecured builds** disable HTTPS certificate verification (`NODE_TLS_REJECT_UNAUTHORIZED=0`).
+            Use them if your corporate network does SSL inspection/interception that causes certificate errors.
+
+            Ad-hoc signed, not Apple-notarized.
 
             ### Source
             - Original: `${{ needs.unpack.outputs.url }}`
-            - Built on: `macos-latest` targeting x64 via GitHub Actions
+            - Built on: `macos-latest` via GitHub Actions
             - Electron: 22.3.27
           files: |
-            rdprep-mac/release/*.dmg
-            rdprep-mac/release/*.zip
-            rdprep-screenshot-x64.png
+            release-artifacts/**/*.dmg
+            screenshots/**/*.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

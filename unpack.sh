@@ -346,29 +346,7 @@ console.log("  Updated files array and extraResources");
     info "Electron-builder config updated"
 }
 
-patch_software_mode() {
-    local output_dir="$1"
-
-    step "Patching softwareMode from prod to dev..."
-
-    local main_bundle
-    main_bundle=$(find "$output_dir/dist" -name 'main.*.js' -type f 2>/dev/null | head -n 1)
-
-    if [[ -z "$main_bundle" ]]; then
-        warn "dist/main.*.js not found, skipping softwareMode patch"
-        return 0
-    fi
-
-    if grep -q 'softwareMode:"prod"' "$main_bundle"; then
-        sed -i 's/softwareMode:"prod"/softwareMode:"dev"/g' "$main_bundle"
-        info "Patched softwareMode: prod -> dev in $(basename "$main_bundle")"
-        info "Form downloads will use direct HTTPS instead of Dropbox API"
-    else
-        warn "softwareMode:\"prod\" not found in bundle (may already be patched)"
-    fi
-}
-
-patch_check_update_url() {
+patch_api_urls() {
     local output_dir="$1"
 
     step "Patching API base URL and checkUpdateUrl..."
@@ -423,8 +401,7 @@ print_summary() {
 
     echo ""
     step "Applied patches:"
-    printf "  ${GREEN}✓${NC} softwareMode: prod -> dev (form downloads use direct HTTPS)\n"
-    printf "  ${GREEN}✓${NC} checkUpdateUrl: localhost -> rd download server\n"
+    printf "  ${GREEN}✓${NC} API base URL: localhost:8774 -> efilingdownload2.rd.go.th\n"
 
     echo ""
     step "Next steps:"
@@ -481,8 +458,7 @@ main() {
     beautify_main_js "$output_dir"
     update_package_json "$output_dir"
     update_electron_builder_config "$output_dir"
-    patch_software_mode "$output_dir"
-    patch_check_update_url "$output_dir"
+    patch_api_urls "$output_dir"
 
     info "Removing temp directory: $TMPDIR"
     rm -rf "$TMPDIR"

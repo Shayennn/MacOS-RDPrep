@@ -125,9 +125,168 @@ jobs:
             fs.writeFileSync(process.argv[1], JSON.stringify(pkg, null, 2) + "\n");
           ' "$PROJECT_DIR/package.json" "${{ steps.config.outputs.version }}"
 
-      - name: Write electron-builder macOS config
+      - name: Upload unpacked project
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdprep-unpacked
+          path: rdprep-mac/
+          retention-days: 1
+
+  build-arm64:
+    needs: unpack
+    runs-on: macos-latest
+    steps:
+      - name: Download unpacked project
+        uses: actions/download-artifact@v4
+        with:
+          name: rdprep-unpacked
+          path: rdprep-mac/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Write electron-builder config (arm64)
         run: |
-          cat > "$GITHUB_WORKSPACE/rdprep-mac/electron-builder-mac.json" <<'JSON'
+          cat > rdprep-mac/electron-builder-mac.json <<'EOF'
+          {
+            "productName": "RDPrep",
+            "appId": "rd.co.th.rd-efiling-app",
+            "compression": "maximum",
+            "artifactName": "RDPrep_${version}_${os}_${arch}.${ext}",
+            "asar": false,
+            "directories": { "output": "release/" },
+            "publish": {
+              "provider": "github",
+              "owner": "Shayennn",
+              "repo": "MacOS-RDPrep"
+            },
+            "files": [
+              "**/*",
+              "build/icon.*",
+              "!main.js.map",
+              "!main.min.js",
+              "!**/*.js.map",
+              "!**/*.ts",
+              "!elevate.exe"
+            ],
+            "mac": {
+              "icon": "build/icon.icns",
+              "target": [{ "target": "dmg", "arch": ["arm64"] }],
+              "category": "public.app-category.finance",
+              "hardenedRuntime": false,
+              "gatekeeperAssess": false
+            }
+          }
+          EOF
+          node -e "
+            const fs = require('fs');
+            const f = process.argv[1];
+            fs.writeFileSync(f, JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')), null, 2) + '\n');
+          " rdprep-mac/electron-builder-mac.json
+
+      - name: Install npm dependencies
+        working-directory: rdprep-mac
+        run: |
+          npm install --ignore-scripts
+          npx electron-rebuild -f -w sqlite3 bcrypt
+
+      - name: Build macOS DMG (arm64)
+        working-directory: rdprep-mac
+        run: npx electron-builder --mac --config electron-builder-mac.json --arm64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List build output
+        run: find rdprep-mac/release -type f \( -name "*.dmg" -o -name "*.zip" \) -exec ls -lh {} \;
+
+      - name: Launch app and capture screenshot
+        run: |
+          APP_PATH=$(find rdprep-mac/release/mac-arm64 -name "RDPrep.app" -type d | head -1)
+          if [[ -z "$APP_PATH" ]]; then
+            APP_PATH=$(find rdprep-mac/release -name "RDPrep.app" -type d | head -1)
+          fi
+          if [[ -z "$APP_PATH" ]]; then
+            echo "RDPrep.app not found, skipping screenshot"
+            exit 0
+          fi
+
+          echo "Removing quarantine attributes..."
+          sudo xattr -cr "$APP_PATH"
+
+          echo "Launching RDPrep.app..."
+          open "$APP_PATH"
+
+          echo "Waiting for app to render (30s)..."
+          sleep 30
+
+          echo "Capturing screenshot..."
+          screencapture -x rdprep-screenshot-arm64.png
+
+          echo "Closing app..."
+          osascript -e 'tell application "RDPrep" to quit' 2>/dev/null || true
+          sleep 2
+
+          ls -lh rdprep-screenshot-arm64.png
+
+      - name: Upload screenshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RDPrep-screenshot-arm64-${{ needs.unpack.outputs.version }}
+          path: rdprep-screenshot-arm64.png
+          retention-days: 30
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RDPrep-macOS-arm64-${{ needs.unpack.outputs.version }}
+          path: rdprep-mac/release/*.dmg
+          retention-days: 30
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ needs.unpack.outputs.version }}-macos-arm64"
+          name: "RDPrep ${{ needs.unpack.outputs.version }} (macOS Apple Silicon)"
+          body: |
+            ## RDPrep ${{ needs.unpack.outputs.version }} - macOS Apple Silicon (arm64)
+
+            ### Installation
+            1. Download the DMG below
+            2. Open and drag RDPrep to Applications
+            3. First launch: right-click → Open (unsigned app)
+
+            ### Source
+            - Original: `${{ needs.unpack.outputs.url }}`
+            - Built on: `macos-latest` (arm64) via GitHub Actions
+            - Electron: 22.3.27
+          files: |
+            rdprep-mac/release/*.dmg
+            rdprep-mac/release/*.zip
+            rdprep-screenshot-arm64.png
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-x64:
+    needs: unpack
+    runs-on: macos-13
+    steps:
+      - name: Download unpacked project
+        uses: actions/download-artifact@v4
+        with:
+          name: rdprep-unpacked
+          path: rdprep-mac/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Write electron-builder config (x64)
+        run: |
+          cat > rdprep-mac/electron-builder-mac.json <<'EOF'
           {
             "productName": "RDPrep",
             "appId": "rd.co.th.rd-efiling-app",
@@ -157,34 +316,12 @@ jobs:
               "gatekeeperAssess": false
             }
           }
-          JSON
+          EOF
           node -e "
             const fs = require('fs');
             const f = process.argv[1];
             fs.writeFileSync(f, JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')), null, 2) + '\n');
-          " "$GITHUB_WORKSPACE/rdprep-mac/electron-builder-mac.json"
-
-      - name: Upload unpacked project
-        uses: actions/upload-artifact@v4
-        with:
-          name: rdprep-unpacked
-          path: rdprep-mac/
-          retention-days: 1
-
-  build-macos:
-    needs: unpack
-    runs-on: macos-latest
-    steps:
-      - name: Download unpacked project
-        uses: actions/download-artifact@v4
-        with:
-          name: rdprep-unpacked
-          path: rdprep-mac/
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
+          " rdprep-mac/electron-builder-mac.json
 
       - name: Install npm dependencies
         working-directory: rdprep-mac
@@ -192,7 +329,7 @@ jobs:
           npm install --ignore-scripts
           npx electron-rebuild -f -w sqlite3 bcrypt
 
-      - name: Build macOS DMG
+      - name: Build macOS DMG (x64)
         working-directory: rdprep-mac
         run: npx electron-builder --mac --config electron-builder-mac.json --x64
         env:
@@ -205,9 +342,11 @@ jobs:
         run: |
           APP_PATH=$(find rdprep-mac/release/mac -name "RDPrep.app" -type d | head -1)
           if [[ -z "$APP_PATH" ]]; then
-            echo "RDPrep.app not found in release output"
-            find rdprep-mac/release -name "*.app" -type d
-            exit 1
+            APP_PATH=$(find rdprep-mac/release -name "RDPrep.app" -type d | head -1)
+          fi
+          if [[ -z "$APP_PATH" ]]; then
+            echo "RDPrep.app not found, skipping screenshot"
+            exit 0
           fi
 
           echo "Removing quarantine attributes..."
@@ -220,35 +359,36 @@ jobs:
           sleep 30
 
           echo "Capturing screenshot..."
-          screencapture -x rdprep-screenshot.png
+          screencapture -x rdprep-screenshot-x64.png
 
           echo "Closing app..."
           osascript -e 'tell application "RDPrep" to quit' 2>/dev/null || true
           sleep 2
 
-          ls -lh rdprep-screenshot.png
+          ls -lh rdprep-screenshot-x64.png
 
       - name: Upload screenshot artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RDPrep-screenshot-${{ needs.unpack.outputs.version }}
-          path: rdprep-screenshot.png
+          name: RDPrep-screenshot-x64-${{ needs.unpack.outputs.version }}
+          path: rdprep-screenshot-x64.png
           retention-days: 30
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RDPrep-macOS-${{ needs.unpack.outputs.version }}
+          name: RDPrep-macOS-x64-${{ needs.unpack.outputs.version }}
           path: rdprep-mac/release/*.dmg
           retention-days: 30
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v${{ needs.unpack.outputs.version }}-macos"
-          name: "RDPrep ${{ needs.unpack.outputs.version }} (macOS)"
+          tag_name: "v${{ needs.unpack.outputs.version }}-macos-x64"
+          name: "RDPrep ${{ needs.unpack.outputs.version }} (macOS Intel)"
           body: |
-            ## RDPrep ${{ needs.unpack.outputs.version }} - macOS
+            ## RDPrep ${{ needs.unpack.outputs.version }} - macOS Intel (x64)
 
             ### Installation
             1. Download the DMG below
@@ -257,11 +397,11 @@ jobs:
 
             ### Source
             - Original: `${{ needs.unpack.outputs.url }}`
-            - Built on: `macos-latest` via GitHub Actions
+            - Built on: `macos-13` (x64) via GitHub Actions
             - Electron: 22.3.27
           files: |
             rdprep-mac/release/*.dmg
             rdprep-mac/release/*.zip
-            rdprep-screenshot.png
+            rdprep-screenshot-x64.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

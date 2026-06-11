@@ -120,24 +120,18 @@ jobs:
             const path = `${process.argv[1]}/main.js`;
             let source = fs.readFileSync(path, "utf8");
 
-            // Electron 22 renderer compatibility
             source = source.replace(/nodeIntegration:\s*!0,(?!\s*\n\s*contextIsolation:)/g,
               "nodeIntegration: !0,\n\t\t\tcontextIsolation: !1,\n\t\t\tsandbox: !1,");
 
-            // Enable devtools in production (hidden by default, open via Alt+I)
             source = source.replace("devTools: !!serve", "devTools: true");
 
-            // Remove auto-open of devtools (keep serve-only behavior)
-            // serve && win.webContents.openDevTools() stays as-is since serve=false in production
-
-            // Forward main process console.log to renderer devtools
             source = source.replace(
               "function createWindow() {",
-              "function createWindow() {\n\t// Forward main process logs to renderer devtools\n\tconst origLog = console.log;\n\tconst origErr = console.error;\n\tconsole.log = function() {\n\t\torigLog.apply(console, arguments);\n\t\ttry { if (win && win.webContents) win.webContents.executeJavaScript(\"console.log(\\\"[main]\\\",\" + JSON.stringify(Array.from(arguments).join(\" \")) + \")\"); } catch(e) {}\n\t};\n\tconsole.error = function() {\n\t\torigErr.apply(console, arguments);\n\t\ttry { if (win && win.webContents) win.webContents.executeJavaScript(\"console.error(\\\"[main]\\\",\" + JSON.stringify(Array.from(arguments).join(\" \")) + \")\"); } catch(e) {}\n\t};"
+              "function createWindow() {\n\tconst origLog = console.log;\n\tconst origErr = console.error;\n\tconsole.log = function() {\n\t\torigLog.apply(console, arguments);\n\t\ttry { if (win && win.webContents) win.webContents.executeJavaScript(\"console.log(\\\"[main]\\\",\" + JSON.stringify(Array.from(arguments).join(\" \")) + \")\"); } catch(e) {}\n\t};\n\tconsole.error = function() {\n\t\torigErr.apply(console, arguments);\n\t\ttry { if (win && win.webContents) win.webContents.executeJavaScript(\"console.error(\\\"[main]\\\",\" + JSON.stringify(Array.from(arguments).join(\" \")) + \")\"); } catch(e) {}\n\t};"
             );
 
             fs.writeFileSync(path, source);
-            console.log("Patched: renderer compat + devtools enabled (hidden) + main→renderer logging");
+            console.log("Patched: renderer compat + devtools enabled (hidden, Alt+I) + main→renderer logging");
           ' "$PROJECT_DIR"
 
       - name: Patch package.json for macOS
@@ -179,29 +173,15 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            variant: secure
             npm_arch: arm64
             electron_flag: --arm64
             artifact_suffix: arm64
             label: Apple Silicon
-          - arch: arm64
-            variant: insecured
-            npm_arch: arm64
-            electron_flag: --arm64
-            artifact_suffix: arm64-insecured
-            label: Apple Silicon (Insecured)
           - arch: x64
-            variant: secure
             npm_arch: x64
             electron_flag: --x64
             artifact_suffix: x64
             label: Intel
-          - arch: x64
-            variant: insecured
-            npm_arch: x64
-            electron_flag: --x64
-            artifact_suffix: x64-insecured
-            label: Intel (Insecured)
     steps:
       - name: Download unpacked project
         uses: actions/download-artifact@v4
@@ -214,48 +194,14 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Patch insecured variant (SSL bypass + direct downloads)
-        if: matrix.variant == 'insecured'
-        run: |
-          PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
-
-          echo "=== Patch 1: Disable SSL verification globally ==="
-          sed -i '' '1s/^/process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";\n/' "$PROJECT_DIR/main.js"
-          head -3 "$PROJECT_DIR/main.js"
-
-          echo "=== Patch 2: Switch to dev mode for direct HTTP downloads ==="
-          DIST_JS=$(ls "$PROJECT_DIR"/dist/main.*.js 2>/dev/null | head -1)
-          if [[ -n "$DIST_JS" ]]; then
-            sed -i '' 's/softwareMode:"prod"/softwareMode:"dev"/g' "$DIST_JS"
-            echo "Patched $(basename "$DIST_JS"): softwareMode prod → dev"
-            grep -o 'softwareMode:"[^"]*"' "$DIST_JS" || true
-          fi
-
-          echo "=== Patch 3: Bypass check-update POST failure → proceed to direct download ==="
-          SVC_JS="$PROJECT_DIR/common/services/add-tax-service.js"
-          CATCH_OLD='.catch(function(e){w.sender.send("common-download-reply",{action:"on_error",error:e,url:r,data:t,dataPlugin:a})})'
-          CATCH_NEW='.catch(function(e){console.log("check-update failed, proceeding with direct download:",e);c()})'
-          if grep -qF "$CATCH_OLD" "$SVC_JS"; then
-            sed -i '' "s|${CATCH_OLD}|${CATCH_NEW}|g" "$SVC_JS"
-            echo "Patched add-tax-service.js: check-update catch → fallback to c()"
-          else
-            echo "WARNING: catch string not found in add-tax-service.js"
-          fi
-
-          echo "=== All insecured patches applied ==="
-
       - name: Write electron-builder config
         run: |
-          SUFFIX=""
-          if [[ "${{ matrix.variant }}" == "insecured" ]]; then
-            SUFFIX="-insecured"
-          fi
-          cat > rdprep-mac/electron-builder-mac.json <<BUILDEREOF
+          cat > rdprep-mac/electron-builder-mac.json <<'BUILDEREOF'
           {
             "productName": "RDPrep",
             "appId": "rd.co.th.rd-efiling-app",
             "compression": "maximum",
-            "artifactName": "RDPrep_\${version}_\${os}_\${arch}${SUFFIX}.\${ext}",
+            "artifactName": "RDPrep_${version}_${os}_${arch}.${ext}",
             "asar": false,
             "npmRebuild": false,
             "nodeGypRebuild": false,
@@ -280,19 +226,20 @@ jobs:
             "mac": {
               "identity": null,
               "icon": "build/icon.icns",
-              "target": [{ "target": "dmg", "arch": ["${{ matrix.arch }}"] }],
+              "target": [{ "target": "dmg", "arch": ["ARCH_PLACEHOLDER"] }],
               "category": "public.app-category.finance",
               "hardenedRuntime": false,
               "gatekeeperAssess": false
             }
           }
           BUILDEREOF
+          sed -i '' "s/ARCH_PLACEHOLDER/${{ matrix.arch }}/g" rdprep-mac/electron-builder-mac.json
           node -e "
             const fs = require('fs');
             const f = process.argv[1];
             fs.writeFileSync(f, JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')), null, 2) + '\n');
           " rdprep-mac/electron-builder-mac.json
-          echo "Config for ${{ matrix.arch }} (${{ matrix.variant }}):"
+          echo "Config for ${{ matrix.arch }}:"
           cat rdprep-mac/electron-builder-mac.json
 
       - name: Write ad-hoc signing hook
@@ -475,14 +422,10 @@ jobs:
           body: |
             ## RDPrep ${{ needs.unpack.outputs.version }} - macOS
 
-            **4 variants available:**
-
-            | File | Arch | Notes |
-            |------|------|-------|
-            | `RDPrep_*_arm64.dmg` | Apple Silicon | Standard build |
-            | `RDPrep_*_arm64-insecured.dmg` | Apple Silicon | Direct downloads, SSL bypass |
-            | `RDPrep_*_x64.dmg` | Intel | Standard build |
-            | `RDPrep_*_x64-insecured.dmg` | Intel | Direct downloads, SSL bypass |
+            | File | Arch |
+            |------|------|
+            | `RDPrep_*_arm64.dmg` | Apple Silicon |
+            | `RDPrep_*_x64.dmg` | Intel |
 
             ### Installation
             1. Download the DMG for your architecture
@@ -491,13 +434,8 @@ jobs:
             4. If macOS says the app is damaged:
                `sudo xattr -dr com.apple.quarantine /Applications/RDPrep.app`
 
-            **Insecured builds** have two patches:
-            1. **SSL bypass** — disables HTTPS certificate verification (`NODE_TLS_REJECT_UNAUTHORIZED=0`)
-            2. **Direct downloads** — redirects form downloads from Dropbox to the RD server directly (`efilingdownload2.rd.go.th`)
-
-            Use them if your network blocks Dropbox or does SSL inspection/interception.
-
             Ad-hoc signed, not Apple-notarized.
+            Press **Alt+I** to open DevTools.
           files: |
             release-artifacts/**/*.dmg
             screenshots/**/*.png

@@ -163,6 +163,9 @@ jobs:
             "compression": "maximum",
             "artifactName": "RDPrep_${version}_${os}_${arch}.${ext}",
             "asar": false,
+            "npmRebuild": false,
+            "nodeGypRebuild": false,
+            "buildDependenciesFromSource": false,
             "directories": { "output": "release/" },
             "publish": {
               "provider": "github",
@@ -364,6 +367,9 @@ jobs:
             "compression": "maximum",
             "artifactName": "RDPrep_${version}_${os}_${arch}.${ext}",
             "asar": false,
+            "npmRebuild": false,
+            "nodeGypRebuild": false,
+            "buildDependenciesFromSource": false,
             "directories": { "output": "release/" },
             "publish": {
               "provider": "github",

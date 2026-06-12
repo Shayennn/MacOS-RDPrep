@@ -4,6 +4,8 @@
 
 set -euo pipefail
 
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -264,6 +266,20 @@ console.log("  scripts: " + Object.keys(pkg.scripts).join(", "));
     info "package.json updated"
 }
 
+install_version_agnostic_bootstrap() {
+    local output_dir="$1"
+    local installer="$SCRIPT_DIR/scripts/install-bootstrap.js"
+
+    if [[ ! -f "$installer" ]]; then
+        error "Bootstrap installer not found: $installer"
+        exit 1
+    fi
+
+    step "Installing version-agnostic Electron bootstrap..."
+    node "$installer" "$output_dir"
+    info "Version-agnostic bootstrap installed"
+}
+
 update_electron_builder_config() {
     local output_dir="$1"
 
@@ -372,6 +388,7 @@ print_summary() {
 
     step "Key files:"
     [[ -f "$output_dir/main.js" ]]            && printf "  ${GREEN}✓${NC} main.js (beautified main process)\n"
+    [[ -f "$output_dir/rdprep-bootstrap.js" ]] && printf "  ${GREEN}✓${NC} rdprep-bootstrap.js (version-agnostic Electron bootstrap)\n"
     [[ -f "$output_dir/main.min.js" ]]        && printf "  ${GREEN}✓${NC} main.min.js (original)\n"
     [[ -f "$output_dir/main.js.map" ]]        && printf "  ${GREEN}✓${NC} main.js.map (source map)\n"
     [[ -f "$output_dir/package.json" ]]       && printf "  ${GREEN}✓${NC} package.json (updated)\n"
@@ -387,7 +404,7 @@ print_summary() {
     echo "  1. cd $output_dir"
     echo "  2. npm install   (install devDependencies)"
     echo "  3. npm start     (launch the app for testing)"
-    echo "  4. Edit main.js, dist/, common/, plugins/ as needed"
+    echo "  4. Edit rdprep-bootstrap.js for Electron hooks, or main.js/dist/common/plugins for app changes"
     echo "  5. npm run build (rebuild the installer)"
     echo ""
 }
@@ -436,6 +453,7 @@ main() {
     create_project_structure "$app_dir" "$output_dir" "$nsis_dir"
     beautify_main_js "$output_dir"
     update_package_json "$output_dir"
+    install_version_agnostic_bootstrap "$output_dir"
     update_electron_builder_config "$output_dir"
 
     info "Removing temp directory: $TMPDIR"

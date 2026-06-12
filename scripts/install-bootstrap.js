@@ -101,6 +101,7 @@ const APPLIED_SYMBOL = Symbol.for("rdprep.bootstrap.applied");
 const CONSOLE_PATCHED_SYMBOL = Symbol.for("rdprep.bootstrap.consolePatched");
 const RENDERER_HELPER_ATTACHED_SYMBOL = Symbol.for("rdprep.bootstrap.rendererHelperAttached");
 const HTTPS_TUNNEL_ORIGINAL_SYMBOL = Symbol.for("rdprep.bootstrap.httpsTunnelOriginalCreateConnection");
+const LEGACY_RMDIR_SYMBOL = Symbol.for("rdprep.bootstrap.legacyRmdirPatched");
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"];
 let activeProxyUrl = null;
 const RENDERER_HELPER_SOURCE = [
@@ -121,6 +122,7 @@ require(RDPREP_RUNTIME_ENTRY);
 
 function applyBootstrap() {
   patchBrowserWindowConstructor();
+  patchLegacyRecursiveRmdir();
   registerRendererHelperInjection();
   disableAxiosBuiltInProxy();
   registerProxyHandler();
@@ -352,6 +354,51 @@ function setEnvironmentProxy(proxyUrl) {
       delete process.env[environmentKey];
     }
   });
+}
+
+// Node 12's recursive fs.rmdir was rimraf-based: it deleted plain files and
+// ignored missing paths. The app depends on both — it rmdir's downloaded
+// .zip files after extraction, with callbacks that throw on any error —
+// while Node 16+ raises ENOTDIR there. Reroute recursive rmdir to fs.rm,
+// which has exactly the old semantics with force:true.
+function patchLegacyRecursiveRmdir() {
+  const fs = require("fs");
+
+  if (fs[LEGACY_RMDIR_SYMBOL] || typeof fs.rm !== "function") {
+    return;
+  }
+  defineFlag(fs, LEGACY_RMDIR_SYMBOL);
+
+  const originalRmdir = fs.rmdir;
+  const originalRmdirSync = fs.rmdirSync;
+
+  fs.rmdir = function rdprepLegacyRmdir(path, options, callback) {
+    if (typeof options === "function") {
+      callback = options;
+      options = undefined;
+    }
+
+    if (options && options.recursive) {
+      fs.rm(path, { recursive: true, force: true }, callback);
+      return;
+    }
+
+    if (options === undefined) {
+      originalRmdir.call(fs, path, callback);
+      return;
+    }
+
+    originalRmdir.call(fs, path, options, callback);
+  };
+
+  fs.rmdirSync = function rdprepLegacyRmdirSync(path, options) {
+    if (options && options.recursive) {
+      fs.rmSync(path, { recursive: true, force: true });
+      return;
+    }
+
+    return originalRmdirSync.call(fs, path, options);
+  };
 }
 
 // axios 0.21.x cannot talk to an HTTP proxy for HTTPS targets: instead of a

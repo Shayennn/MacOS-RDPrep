@@ -166,21 +166,40 @@ function patchBrowserWindowConstructor() {
   copyStaticMembers(OriginalBrowserWindow, RDPrepBrowserWindow);
   defineFlag(RDPrepBrowserWindow, APPLIED_SYMBOL);
 
-  try {
-    electron.BrowserWindow = RDPrepBrowserWindow;
-  } catch (_error) {
-    try {
-      Object.defineProperty(electron, "BrowserWindow", {
-        value: RDPrepBrowserWindow,
-        enumerable: true,
-        configurable: true,
-        writable: true
-      });
-    } catch (defineError) {
-      logBootstrapError("BrowserWindow patch failed (Electron getter is read-only)", defineError);
-      return;
-    }
+  // In Electron 22+ electron.BrowserWindow is a NON-configurable getter, so both
+  // "electron.BrowserWindow = X" and Object.defineProperty(electron, ...) throw and
+  // the patch silently no-ops. Without it the app's windows keep Electron 22 defaults
+  // (contextIsolation:true, sandbox:true), the nodeIntegration renderer loses Node
+  // access, Angular fails to bootstrap, and the window stays blank/white.
+  // We instead intercept require("electron") so the runtime entry receives a facade
+  // whose BrowserWindow is our wrapper while every other member delegates to the real
+  // module. This needs no write to the read-only getter.
+  installElectronRequireInterception(RDPrepBrowserWindow);
+}
+
+function installElectronRequireInterception(patchedBrowserWindow) {
+  const Module = require("module");
+
+  if (Module[APPLIED_SYMBOL]) {
+    return;
   }
+  defineFlag(Module, APPLIED_SYMBOL);
+
+  const electronFacade = Object.create(electron);
+  Object.defineProperty(electronFacade, "BrowserWindow", {
+    value: patchedBrowserWindow,
+    enumerable: true,
+    configurable: true,
+    writable: true
+  });
+
+  const originalRequire = Module.prototype.require;
+  Module.prototype.require = function rdprepElectronRequire(request) {
+    if (request === "electron") {
+      return electronFacade;
+    }
+    return originalRequire.apply(this, arguments);
+  };
 }
 
 function patchBrowserWindowOptions(options) {

@@ -203,7 +203,10 @@ jobs:
         run: |
           PROJECT_DIR="$GITHUB_WORKSPACE/rdprep-mac"
           node -e '
-            const pkg = require("./" + process.argv[1] + "/package.json");
+            const fs = require("fs");
+            const path = require("path");
+            const dir = process.argv[1];
+            const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
             if (pkg.main !== "rdprep-bootstrap.js") {
               console.error("Expected package.json.main === rdprep-bootstrap.js, got:", pkg.main);
               process.exit(1);
@@ -212,8 +215,7 @@ jobs:
               console.error("Missing or wrong rdprepBootstrap metadata:", pkg.rdprepBootstrap);
               process.exit(1);
             }
-            const fs = require("fs");
-            if (!fs.existsSync("./" + process.argv[1] + "/rdprep-bootstrap.js")) {
+            if (!fs.existsSync(path.join(dir, "rdprep-bootstrap.js"))) {
               console.error("rdprep-bootstrap.js not found");
               process.exit(1);
             }

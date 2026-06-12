@@ -102,6 +102,7 @@ const CONSOLE_PATCHED_SYMBOL = Symbol.for("rdprep.bootstrap.consolePatched");
 const RENDERER_HELPER_ATTACHED_SYMBOL = Symbol.for("rdprep.bootstrap.rendererHelperAttached");
 const HTTPS_TUNNEL_ORIGINAL_SYMBOL = Symbol.for("rdprep.bootstrap.httpsTunnelOriginalCreateConnection");
 const LEGACY_RMDIR_SYMBOL = Symbol.for("rdprep.bootstrap.legacyRmdirPatched");
+const WEBCONTENTS_SEND_SYMBOL = Symbol.for("rdprep.bootstrap.webContentsSendPatched");
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"];
 let activeProxyUrl = null;
 const RENDERER_HELPER_SOURCE = [
@@ -258,6 +259,7 @@ function attachRendererHelper(browserWindow) {
     return;
   }
 
+  patchWebContentsSendSerialization(webContents);
   defineFlag(webContents, RENDERER_HELPER_ATTACHED_SYMBOL);
   webContents.on("did-finish-load", function() {
     injectRendererHelper(webContents);
@@ -279,6 +281,169 @@ function injectRendererHelper(webContents) {
   } catch (error) {
     logBootstrapError("renderer helper injection failed", error);
   }
+}
+
+// Electron 8 serialized IPC payloads with a lenient JSON-like encoder that
+// silently dropped functions/cycles; Electron 9+ uses the V8 structured-clone
+// serializer, which fails on non-cloneable values. The app routinely sends raw
+// axios response objects (live sockets, config functions, circular refs) over
+// IPC — e.g. event.sender.send("getUpdate-reply",{data:e}) in update-service.js.
+// Under Electron 22 the serialize failure is logged and SWALLOWED inside
+// webFrameMain.send (so webContents.send returns normally and a try/catch never
+// fires); the renderer's reply simply never arrives and the UI hangs forever on
+// the "please wait" spinner. We therefore probe each payload with v8.serialize
+// (same V8 ValueSerializer, so identical cloneability verdict — it accepts
+// cycles, Date, Buffer, Map and rejects functions/host objects) and only fall
+// back to a JSON-safe copy when the probe proves the payload non-cloneable.
+// Payloads that serialize cleanly are sent untouched, preserving full fidelity.
+function patchWebContentsSendSerialization(webContents) {
+  const prototype = Object.getPrototypeOf(webContents);
+
+  if (!prototype || prototype[WEBCONTENTS_SEND_SYMBOL] || typeof prototype.send !== "function") {
+    return;
+  }
+  defineFlag(prototype, WEBCONTENTS_SEND_SYMBOL);
+
+  const originalSend = prototype.send;
+
+  prototype.send = function rdprepSafeSend(channel) {
+    let sendArguments = arguments;
+
+    if (!isIpcCloneable(arguments)) {
+      const sanitizedArgs = [channel];
+      for (let index = 1; index < arguments.length; index += 1) {
+        sanitizedArgs.push(sanitizeForIpc(arguments[index]));
+      }
+      sendArguments = sanitizedArgs;
+    }
+
+    try {
+      return originalSend.apply(this, sendArguments);
+    } catch (error) {
+      if (!isSerializationError(error)) {
+        throw error;
+      }
+
+      // Backstop: probe and the real serializer disagreed. Sanitize and retry.
+      const sanitizedArgs = [channel];
+      for (let index = 1; index < arguments.length; index += 1) {
+        sanitizedArgs.push(sanitizeForIpc(arguments[index]));
+      }
+
+      try {
+        return originalSend.apply(this, sanitizedArgs);
+      } catch (retryError) {
+        logBootstrapError("IPC send on channel " + String(channel) + " failed after sanitizing", retryError);
+      }
+    }
+  };
+}
+
+function isIpcCloneable(args) {
+  let v8;
+
+  try {
+    v8 = require("v8");
+  } catch (_error) {
+    return true;
+  }
+
+  if (!v8 || typeof v8.serialize !== "function") {
+    return true;
+  }
+
+  try {
+    // arguments[0] is the channel string; probe only the payload arguments.
+    for (let index = 1; index < args.length; index += 1) {
+      v8.serialize(args[index]);
+    }
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isSerializationError(error) {
+  const message = error && error.message ? error.message : String(error);
+  return /serialize|could not be cloned|structured/i.test(message);
+}
+
+function sanitizeForIpc(value) {
+  return sanitizeValue(value, new WeakSet(), 0);
+}
+
+function sanitizeValue(value, seen, depth) {
+  if (value === null) {
+    return null;
+  }
+
+  const valueType = typeof value;
+
+  if (valueType === "string" || valueType === "boolean") {
+    return value;
+  }
+
+  if (valueType === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (valueType === "bigint") {
+    return value.toString();
+  }
+
+  if (valueType === "undefined" || valueType === "function" || valueType === "symbol") {
+    return undefined;
+  }
+
+  if (value instanceof Error) {
+    return { name: value.name, message: value.message, stack: value.stack };
+  }
+
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(value)) {
+    return value;
+  }
+
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer || value instanceof Date) {
+    return value;
+  }
+
+  if (depth >= 8) {
+    return undefined;
+  }
+
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+
+  let result;
+
+  if (Array.isArray(value)) {
+    result = value.map(function(element) {
+      return sanitizeValue(element, seen, depth + 1);
+    });
+  } else {
+    result = {};
+    const keys = Object.keys(value);
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index];
+      let propertyValue;
+
+      try {
+        propertyValue = value[key];
+      } catch (_error) {
+        continue;
+      }
+
+      const sanitized = sanitizeValue(propertyValue, seen, depth + 1);
+      if (typeof sanitized !== "undefined") {
+        result[key] = sanitized;
+      }
+    }
+  }
+
+  seen.delete(value);
+  return result;
 }
 
 function registerProxyHandler() {

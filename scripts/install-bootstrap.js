@@ -100,6 +100,7 @@ const bootstrapConsoleError = console.error.bind(console);
 const APPLIED_SYMBOL = Symbol.for("rdprep.bootstrap.applied");
 const CONSOLE_PATCHED_SYMBOL = Symbol.for("rdprep.bootstrap.consolePatched");
 const RENDERER_HELPER_ATTACHED_SYMBOL = Symbol.for("rdprep.bootstrap.rendererHelperAttached");
+const HTTPS_TUNNEL_ORIGINAL_SYMBOL = Symbol.for("rdprep.bootstrap.httpsTunnelOriginalCreateConnection");
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"];
 let activeProxyUrl = null;
 const RENDERER_HELPER_SOURCE = [
@@ -121,7 +122,9 @@ require(RDPREP_RUNTIME_ENTRY);
 function applyBootstrap() {
   patchBrowserWindowConstructor();
   registerRendererHelperInjection();
+  disableAxiosBuiltInProxy();
   registerProxyHandler();
+  applyEnvironmentProxyOnReady();
   patchConsoleForwarding();
 }
 
@@ -280,26 +283,9 @@ function registerProxyHandler() {
   ipcMain.on("set-proxy", function(event, proxyUrl) {
     const parsedProxy = parseProxyInput(proxyUrl);
 
-    if (!parsedProxy.ok) {
-      if (event) {
-        event.returnValue = activeProxyUrl;
-      }
-      return;
+    if (parsedProxy.ok) {
+      applyProxyConfiguration(parsedProxy.proxyUrl);
     }
-
-    try {
-      setAxiosProxy(parsedProxy.proxyUrl, parsedProxy.axiosProxy);
-    } catch (error) {
-      logBootstrapError("axios proxy configuration failed", error);
-      if (event) {
-        event.returnValue = activeProxyUrl;
-      }
-      return;
-    }
-
-    setEnvironmentProxy(parsedProxy.proxyUrl);
-    activeProxyUrl = parsedProxy.proxyUrl;
-    setElectronSessionProxy(activeProxyUrl);
 
     if (event) {
       event.returnValue = activeProxyUrl;
@@ -307,20 +293,42 @@ function registerProxyHandler() {
   });
 }
 
+function applyEnvironmentProxyOnReady() {
+  const environmentProxyUrl =
+    process.env.HTTPS_PROXY || process.env.https_proxy ||
+    process.env.HTTP_PROXY || process.env.http_proxy || null;
+  const parsedProxy = parseProxyInput(environmentProxyUrl);
+
+  if (!parsedProxy.ok || !parsedProxy.proxyUrl) {
+    return;
+  }
+
+  app.whenReady().then(function() {
+    applyProxyConfiguration(parsedProxy.proxyUrl);
+    console.log("[RDPrep bootstrap] proxy applied from environment: " + parsedProxy.proxyUrl);
+  }).catch(function(error) {
+    logBootstrapError("environment proxy configuration failed", error);
+  });
+}
+
+function applyProxyConfiguration(proxyUrl) {
+  disableAxiosBuiltInProxy();
+  setNodeHttpsTunnel(proxyUrl);
+  setEnvironmentProxy(proxyUrl);
+  activeProxyUrl = proxyUrl;
+  setElectronSessionProxy(proxyUrl);
+}
+
 function parseProxyInput(proxyUrl) {
   const normalizedProxyUrl = normalizeProxyUrl(proxyUrl);
 
   if (normalizedProxyUrl === null) {
-    return { ok: true, proxyUrl: null, axiosProxy: null };
+    return { ok: true, proxyUrl: null };
   }
 
   try {
     const parsedProxy = new URL(normalizedProxyUrl);
-    return {
-      ok: true,
-      proxyUrl: parsedProxy.href,
-      axiosProxy: buildAxiosProxyConfig(parsedProxy)
-    };
+    return { ok: true, proxyUrl: parsedProxy.href };
   } catch (error) {
     logBootstrapError("invalid proxy input " + normalizedProxyUrl, error);
     return { ok: false };
@@ -336,26 +344,6 @@ function normalizeProxyUrl(proxyUrl) {
   return normalizedProxyUrl === "" ? null : normalizedProxyUrl;
 }
 
-function buildAxiosProxyConfig(parsedProxy) {
-  const axiosProxy = {
-    protocol: parsedProxy.protocol.replace(/:$/, ""),
-    host: parsedProxy.hostname
-  };
-
-  if (parsedProxy.port) {
-    axiosProxy.port = Number(parsedProxy.port);
-  }
-
-  if (parsedProxy.username || parsedProxy.password) {
-    axiosProxy.auth = {
-      username: decodeURIComponent(parsedProxy.username),
-      password: decodeURIComponent(parsedProxy.password)
-    };
-  }
-
-  return axiosProxy;
-}
-
 function setEnvironmentProxy(proxyUrl) {
   PROXY_ENV_KEYS.forEach(function(environmentKey) {
     if (proxyUrl) {
@@ -366,7 +354,12 @@ function setEnvironmentProxy(proxyUrl) {
   });
 }
 
-function setAxiosProxy(proxyUrl, axiosProxyConfig) {
+// axios 0.21.x cannot talk to an HTTP proxy for HTTPS targets: instead of a
+// CONNECT tunnel it sends the request in absolute-form over plain HTTP, which
+// proxies (gost included) reject with 400. Its built-in proxy handling — both
+// explicit config and env-var pickup — must therefore stay disabled; HTTPS
+// proxying happens at the socket layer in setNodeHttpsTunnel instead.
+function disableAxiosBuiltInProxy() {
   let axios;
 
   try {
@@ -375,16 +368,128 @@ function setAxiosProxy(proxyUrl, axiosProxyConfig) {
     return;
   }
 
-  if (!axios || !axios.defaults) {
-    return;
+  if (axios && axios.defaults) {
+    axios.defaults.proxy = false;
   }
+}
+
+// Tunnels every https.Agent connection through the proxy with a real CONNECT
+// handshake. Patching the prototype covers the app's own per-request
+// new https.Agent({rejectUnauthorized:false}) instances as well as
+// https.globalAgent, regardless of which HTTP client sits on top.
+function setNodeHttpsTunnel(proxyUrl) {
+  const https = require("https");
+  const net = require("net");
+  const agentPrototype = https.Agent.prototype;
+
+  if (!agentPrototype[HTTPS_TUNNEL_ORIGINAL_SYMBOL]) {
+    Object.defineProperty(agentPrototype, HTTPS_TUNNEL_ORIGINAL_SYMBOL, {
+      value: agentPrototype.createConnection,
+      enumerable: false,
+      configurable: true,
+      writable: true
+    });
+  }
+
+  const originalCreateConnection = agentPrototype[HTTPS_TUNNEL_ORIGINAL_SYMBOL];
 
   if (!proxyUrl) {
-    axios.defaults.proxy = false;
+    agentPrototype.createConnection = originalCreateConnection;
     return;
   }
 
-  axios.defaults.proxy = axiosProxyConfig;
+  const proxy = new URL(proxyUrl);
+  const proxyHost = proxy.hostname;
+  const proxyPort = Number(proxy.port || 80);
+  const proxyAuthHeader = proxy.username || proxy.password
+    ? "Proxy-Authorization: Basic " +
+      Buffer.from(decodeURIComponent(proxy.username) + ":" + decodeURIComponent(proxy.password)).toString("base64") +
+      "\\r\\n"
+    : "";
+
+  agentPrototype.createConnection = function rdprepTunneledCreateConnection(options, oncreate) {
+    const agent = this;
+    const connectionOptions = options || {};
+    const targetHost = connectionOptions.host || connectionOptions.hostname || "localhost";
+    const targetPort = Number(connectionOptions.port || 443);
+    const targetAuthority = targetHost + ":" + targetPort;
+    let settled = false;
+    let connectResponse = "";
+
+    const proxySocket = net.connect({ host: proxyHost, port: proxyPort });
+
+    function failTunnel(error) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      proxySocket.destroy();
+      if (typeof oncreate === "function") {
+        oncreate(error);
+      }
+    }
+
+    proxySocket.on("error", failTunnel);
+    proxySocket.setTimeout(30000, function() {
+      failTunnel(new Error("proxy CONNECT to " + targetAuthority + " timed out"));
+    });
+
+    proxySocket.once("connect", function() {
+      proxySocket.write(
+        "CONNECT " + targetAuthority + " HTTP/1.1\\r\\n" +
+        "Host: " + targetAuthority + "\\r\\n" +
+        proxyAuthHeader +
+        "\\r\\n"
+      );
+    });
+
+    proxySocket.on("data", function onConnectData(chunk) {
+      connectResponse += chunk.toString("latin1");
+
+      if (connectResponse.indexOf("\\r\\n\\r\\n") === -1) {
+        if (connectResponse.length > 16384) {
+          failTunnel(new Error("proxy CONNECT response exceeded 16KB"));
+        }
+        return;
+      }
+
+      proxySocket.removeListener("data", onConnectData);
+
+      const statusMatch = /^HTTP\\/1\\.[01] (\\d{3})/.exec(connectResponse);
+      if (!statusMatch || statusMatch[1] !== "200") {
+        failTunnel(new Error(
+          "proxy CONNECT to " + targetAuthority + " failed: " + connectResponse.split("\\r\\n")[0]
+        ));
+        return;
+      }
+
+      if (settled) {
+        return;
+      }
+      settled = true;
+      proxySocket.setTimeout(0);
+      proxySocket.removeListener("error", failTunnel);
+
+      const secureOptions = Object.assign({}, connectionOptions, {
+        socket: proxySocket,
+        host: targetHost,
+        servername: connectionOptions.servername || (net.isIP(targetHost) ? "" : targetHost)
+      });
+      delete secureOptions.path;
+
+      try {
+        const secureSocket = originalCreateConnection.call(agent, secureOptions);
+        if (typeof oncreate === "function") {
+          oncreate(null, secureSocket);
+        }
+      } catch (error) {
+        proxySocket.destroy();
+        if (typeof oncreate === "function") {
+          oncreate(error);
+        }
+      }
+    });
+  };
 }
 
 function setElectronSessionProxy(proxyUrl) {

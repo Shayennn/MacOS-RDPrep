@@ -166,7 +166,21 @@ function patchBrowserWindowConstructor() {
   copyStaticMembers(OriginalBrowserWindow, RDPrepBrowserWindow);
   defineFlag(RDPrepBrowserWindow, APPLIED_SYMBOL);
 
-  electron.BrowserWindow = RDPrepBrowserWindow;
+  try {
+    electron.BrowserWindow = RDPrepBrowserWindow;
+  } catch (_error) {
+    try {
+      Object.defineProperty(electron, "BrowserWindow", {
+        value: RDPrepBrowserWindow,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    } catch (defineError) {
+      logBootstrapError("BrowserWindow patch failed (Electron getter is read-only)", defineError);
+      return;
+    }
+  }
 }
 
 function patchBrowserWindowOptions(options) {
